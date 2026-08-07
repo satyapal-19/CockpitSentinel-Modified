@@ -1,0 +1,11 @@
+weights:
+  eyes_closed: 3
+  yawning: 2
+  looking_away: 2
+  phone_detected: 4
+  smoking_detected: 3
+
+thresholds:
+  caution: 2
+  warning: 4
+  critical: 6

@@ -10,7 +10,6 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_STORAGE_ROOT = Path("D:/CockpitSentinel")
 ENV_FILE = REPO_ROOT / ".env"
@@ -61,7 +60,9 @@ STORAGE_RELATIVE_DIRS = [
 ]
 
 
-def run(command: list[str], *, env: dict[str, str] | None = None, capture: bool = False) -> subprocess.CompletedProcess[str]:
+def run(
+    command: list[str], *, env: dict[str, str] | None = None, capture: bool = False
+) -> subprocess.CompletedProcess[str]:
     print(f"$ {' '.join(command)}")
     return subprocess.run(
         command,

@@ -16,7 +16,17 @@ def check_python_version() -> tuple[bool, str]:
 
 
 def check_imports() -> list[tuple[str, bool, str]]:
-    packages = ["cv2", "mediapipe", "ultralytics", "numpy", "pandas", "sklearn", "yaml", "dotenv", "psutil"]
+    packages = [
+        "cv2",
+        "mediapipe",
+        "ultralytics",
+        "numpy",
+        "pandas",
+        "sklearn",
+        "yaml",
+        "dotenv",
+        "psutil",
+    ]
     results = []
     for pkg in packages:
         try:

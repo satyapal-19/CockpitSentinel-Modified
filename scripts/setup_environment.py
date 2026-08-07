@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from urllib.request import urlretrieve
 
 from dotenv import dotenv_values
 
@@ -15,6 +16,10 @@ DEFAULT_STORAGE_ROOT = Path("D:/CockpitSentinel")
 ENV_FILE = REPO_ROOT / ".env"
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
 VENV_PYTHON = REPO_ROOT / ".venv" / "Scripts" / "python.exe"
+FACE_LANDMARKER_URL = (
+    "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/"
+    "float16/latest/face_landmarker.task"
+)
 
 REPO_DIRS = [
     REPO_ROOT / "logs" / "app",
@@ -161,6 +166,24 @@ def copy_yolo_weights(storage_root: Path) -> None:
     print(f"[ok] copied pretrained weights to {target}")
 
 
+def download_face_landmarker(storage_root: Path) -> None:
+    """Download the MediaPipe asset once; retain existing shared model files."""
+
+    target = storage_root / "models" / "pretrained" / "face_landmarker.task"
+    if target.exists():
+        print(f"[skip] face landmark model already present: {target}")
+        return
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    partial_target = target.with_suffix(".task.part")
+    try:
+        urlretrieve(FACE_LANDMARKER_URL, partial_target)
+        partial_target.replace(target)
+    finally:
+        partial_target.unlink(missing_ok=True)
+    print(f"[ok] downloaded face landmark model to {target}")
+
+
 def kaggle_credentials() -> tuple[str | None, str | None]:
     env_values = dotenv_values(ENV_FILE) if ENV_FILE.exists() else {}
     username = os.environ.get("KAGGLE_USERNAME") or env_values.get("KAGGLE_USERNAME")
@@ -223,6 +246,7 @@ def main() -> int:
     ensure_storage_dirs(storage_root)
     install_requirements()
     copy_yolo_weights(storage_root)
+    download_face_landmarker(storage_root)
     maybe_download_kaggle_datasets(storage_root)
     print("[done] environment bootstrap complete")
     return 0

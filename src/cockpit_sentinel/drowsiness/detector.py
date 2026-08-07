@@ -1,0 +1,201 @@
+"""MediaPipe-based fatigue and attention signal extraction."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass
+from math import dist
+from pathlib import Path
+from typing import Protocol
+
+import cv2
+import mediapipe as mp
+import numpy as np
+from mediapipe.tasks.python import vision
+from mediapipe.tasks.python.core.base_options import BaseOptions
+
+from cockpit_sentinel.domain import DriverSignals
+
+LEFT_EYE = (33, 160, 158, 133, 153, 144)
+RIGHT_EYE = (362, 385, 387, 263, 373, 380)
+MOUTH = (61, 13, 14, 291)
+HEAD_POSE = (1, 152, 33, 263, 61, 291)
+HEAD_MODEL_POINTS = np.array(
+    [
+        (0.0, 0.0, 0.0),
+        (0.0, -330.0, -65.0),
+        (-225.0, 170.0, -135.0),
+        (225.0, 170.0, -135.0),
+        (-150.0, -150.0, -125.0),
+        (150.0, -150.0, -125.0),
+    ],
+    dtype=np.float64,
+)
+
+
+class Landmark(Protocol):
+    """Minimal landmark shape returned by MediaPipe."""
+
+    x: float
+    y: float
+
+
+@dataclass(frozen=True, slots=True)
+class DrowsinessConfig:
+    """Thresholds for converting face geometry into driver signals."""
+
+    eye_aspect_ratio_threshold: float = 0.22
+    mouth_aspect_ratio_threshold: float = 0.60
+    head_yaw_threshold_degrees: float = 30.0
+    minimum_consecutive_frames: int = 3
+
+    def __post_init__(self) -> None:
+        if not 0 < self.eye_aspect_ratio_threshold < 1:
+            raise ValueError("eye_aspect_ratio_threshold must be between 0 and 1.")
+        if self.mouth_aspect_ratio_threshold <= 0:
+            raise ValueError("mouth_aspect_ratio_threshold must be positive.")
+        if not 0 < self.head_yaw_threshold_degrees <= 90:
+            raise ValueError("head_yaw_threshold_degrees must be between 0 and 90.")
+        if self.minimum_consecutive_frames < 1:
+            raise ValueError("minimum_consecutive_frames must be at least 1.")
+
+
+@dataclass(frozen=True, slots=True)
+class DrowsinessAnalysis:
+    """Raw geometry and stabilized signals for one video frame."""
+
+    signals: DriverSignals
+    face_detected: bool
+    eye_aspect_ratio: float | None = None
+    mouth_aspect_ratio: float | None = None
+    head_yaw_degrees: float | None = None
+
+
+def eye_aspect_ratio(points: Sequence[tuple[float, float]]) -> float:
+    """Return the standard six-point eye aspect ratio."""
+
+    if len(points) != 6:
+        raise ValueError("Eye aspect ratio requires exactly six points.")
+    vertical = dist(points[1], points[5]) + dist(points[2], points[4])
+    horizontal = 2 * dist(points[0], points[3])
+    return vertical / horizontal if horizontal else 0.0
+
+
+def mouth_aspect_ratio(points: Sequence[tuple[float, float]]) -> float:
+    """Return vertical mouth opening relative to mouth width."""
+
+    if len(points) != 4:
+        raise ValueError("Mouth aspect ratio requires exactly four points.")
+    horizontal = dist(points[0], points[3])
+    vertical = dist(points[1], points[2])
+    return vertical / horizontal if horizontal else 0.0
+
+
+class SignalStabilizer:
+    """Require a signal to persist for consecutive frames before alerting."""
+
+    def __init__(self, minimum_consecutive_frames: int) -> None:
+        if minimum_consecutive_frames < 1:
+            raise ValueError("minimum_consecutive_frames must be at least 1.")
+        self._minimum_consecutive_frames = minimum_consecutive_frames
+        self._counts = {name: 0 for name in DriverSignals.__dataclass_fields__}
+
+    def update(self, raw_signals: DriverSignals) -> DriverSignals:
+        stabilized: dict[str, bool] = {}
+        for name in self._counts:
+            active = getattr(raw_signals, name)
+            self._counts[name] = self._counts[name] + 1 if active else 0
+            stabilized[name] = self._counts[name] >= self._minimum_consecutive_frames
+        return DriverSignals(**stabilized)
+
+    def reset(self) -> None:
+        for name in self._counts:
+            self._counts[name] = 0
+
+
+class DrowsinessDetector:
+    """Extract eye, mouth, and head-direction signals from BGR OpenCV frames."""
+
+    def __init__(self, model_path: Path, config: DrowsinessConfig | None = None) -> None:
+        if not model_path.exists():
+            raise FileNotFoundError(f"Face landmark model was not found: {model_path}")
+
+        self.config = config or DrowsinessConfig()
+        options = vision.FaceLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=str(model_path)),
+            running_mode=vision.RunningMode.IMAGE,
+            num_faces=1,
+        )
+        self._landmarker = vision.FaceLandmarker.create_from_options(options)
+        self._stabilizer = SignalStabilizer(self.config.minimum_consecutive_frames)
+
+    def close(self) -> None:
+        self._landmarker.close()
+
+    def __enter__(self) -> DrowsinessDetector:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def analyze(self, frame: np.ndarray) -> DrowsinessAnalysis:
+        """Analyze one BGR frame and return stabilized fatigue/attention signals."""
+
+        if frame.ndim != 3 or frame.shape[2] != 3:
+            raise ValueError("Expected a three-channel BGR frame.")
+
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+        result = self._landmarker.detect(image)
+        if not result.face_landmarks:
+            self._stabilizer.reset()
+            return DrowsinessAnalysis(signals=DriverSignals(), face_detected=False)
+
+        landmarks = result.face_landmarks[0]
+        height, width = frame.shape[:2]
+        left_ear = eye_aspect_ratio(_pixel_points(landmarks, LEFT_EYE, width, height))
+        right_ear = eye_aspect_ratio(_pixel_points(landmarks, RIGHT_EYE, width, height))
+        ear = (left_ear + right_ear) / 2
+        mar = mouth_aspect_ratio(_pixel_points(landmarks, MOUTH, width, height))
+        yaw = _estimate_head_yaw(landmarks, width, height)
+
+        raw_signals = DriverSignals(
+            eyes_closed=ear < self.config.eye_aspect_ratio_threshold,
+            yawning=mar > self.config.mouth_aspect_ratio_threshold,
+            looking_away=abs(yaw) > self.config.head_yaw_threshold_degrees,
+        )
+        return DrowsinessAnalysis(
+            signals=self._stabilizer.update(raw_signals),
+            face_detected=True,
+            eye_aspect_ratio=ear,
+            mouth_aspect_ratio=mar,
+            head_yaw_degrees=yaw,
+        )
+
+
+def _pixel_points(
+    landmarks: Sequence[Landmark], indices: Sequence[int], width: int, height: int
+) -> list[tuple[float, float]]:
+    return [(landmarks[index].x * width, landmarks[index].y * height) for index in indices]
+
+
+def _estimate_head_yaw(landmarks: Sequence[Landmark], width: int, height: int) -> float:
+    image_points = np.array(_pixel_points(landmarks, HEAD_POSE, width, height), dtype=np.float64)
+    focal_length = float(width)
+    camera_matrix = np.array(
+        [[focal_length, 0.0, width / 2], [0.0, focal_length, height / 2], [0.0, 0.0, 1.0]]
+    )
+    success, rotation_vector, _ = cv2.solvePnP(
+        HEAD_MODEL_POINTS,
+        image_points,
+        camera_matrix,
+        np.zeros((4, 1)),
+        flags=cv2.SOLVEPNP_ITERATIVE,
+    )
+    if not success:
+        return 0.0
+
+    rotation_matrix, _ = cv2.Rodrigues(rotation_vector)
+    projection_matrix = np.hstack((rotation_matrix, np.zeros((3, 1))))
+    _, _, _, _, _, _, euler_angles = cv2.decomposeProjectionMatrix(projection_matrix)
+    return float(euler_angles[1, 0])

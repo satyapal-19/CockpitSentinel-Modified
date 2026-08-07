@@ -1,6 +1,10 @@
 # Model registry — paths point to D: drive (see COCKPIT_MODELS_ROOT)
 
 pretrained:
+  face_landmarker:
+    path: "{models_root}/pretrained/face_landmarker.task"
+    source: mediapipe
+    purpose: face landmarks for fatigue and attention signals
   yolov8n:
     path: "{models_root}/pretrained/yolov8n.pt"
     source: ultralytics

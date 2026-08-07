@@ -1,0 +1,4 @@
+eye_aspect_ratio_threshold: 0.22
+mouth_aspect_ratio_threshold: 0.60
+head_yaw_threshold_degrees: 30.0
+minimum_consecutive_frames: 3

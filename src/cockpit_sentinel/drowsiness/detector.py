@@ -6,11 +6,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from math import dist
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 import cv2
 import mediapipe as mp
 import numpy as np
+import yaml
 from mediapipe.tasks.python import vision
 from mediapipe.tasks.python.core.base_options import BaseOptions
 
@@ -69,6 +70,21 @@ class DrowsinessAnalysis:
     eye_aspect_ratio: float | None = None
     mouth_aspect_ratio: float | None = None
     head_yaw_degrees: float | None = None
+
+
+def load_drowsiness_config(path: Path) -> DrowsinessConfig:
+    """Load detector thresholds from a YAML configuration file."""
+
+    with path.open(encoding="utf-8") as config_file:
+        raw_config: Any = yaml.safe_load(config_file)
+    if not isinstance(raw_config, dict):
+        raise ValueError("Drowsiness configuration must be a YAML mapping.")
+
+    expected_keys = set(DrowsinessConfig.__dataclass_fields__)
+    if set(raw_config) != expected_keys:
+        raise ValueError("Drowsiness configuration must define every threshold.")
+
+    return DrowsinessConfig(**raw_config)
 
 
 def eye_aspect_ratio(points: Sequence[tuple[float, float]]) -> float:

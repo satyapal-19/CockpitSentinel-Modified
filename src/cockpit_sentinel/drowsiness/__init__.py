@@ -6,6 +6,7 @@ from cockpit_sentinel.drowsiness.detector import (
     DrowsinessDetector,
     SignalStabilizer,
     eye_aspect_ratio,
+    load_drowsiness_config,
     mouth_aspect_ratio,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "DrowsinessDetector",
     "SignalStabilizer",
     "eye_aspect_ratio",
+    "load_drowsiness_config",
     "mouth_aspect_ratio",
 ]

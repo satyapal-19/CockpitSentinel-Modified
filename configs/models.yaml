@@ -8,6 +8,10 @@ pretrained:
   yolov8n:
     path: "{models_root}/pretrained/yolov8n.pt"
     source: ultralytics
-    purpose: distraction detection (phone, smoking)
+    purpose: cell-phone detection
+  yolov8s-worldv2:
+    path: "{models_root}/pretrained/yolov8s-worldv2.pt"
+    source: ultralytics
+    purpose: text-prompted smoking-related object detection
 
 trained: {}

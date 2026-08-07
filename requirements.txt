@@ -14,6 +14,8 @@ certifi==2026.7.22
     #   requests
 cffi==2.1.1
     # via sounddevice
+clip @ git+https://github.com/ultralytics/CLIP.git@488e81a6711eea7346872b46ea928b367da8889d
+    # via -r requirements.in
 charset-normalizer==3.4.9
     # via requests
 colorama==0.4.6
@@ -32,6 +34,8 @@ fonttools==4.63.0
     # via matplotlib
 fsspec==2026.7.0
     # via torch
+ftfy==6.3.1
+    # via clip
 idna==3.18
     # via requests
 jinja2==3.1.6
@@ -127,6 +131,8 @@ requests==2.34.2
     #   kaggle
     #   kagglesdk
     #   ultralytics
+regex==2026.7.19
+    # via clip
 scikit-learn==1.9.0
     # via -r requirements.in
 scipy==1.17.1

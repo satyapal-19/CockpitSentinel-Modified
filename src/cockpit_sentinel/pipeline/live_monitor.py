@@ -13,7 +13,12 @@ import numpy as np
 from dotenv import dotenv_values
 
 from cockpit_sentinel.alerts.policy import AlertPolicy, load_alert_policy
-from cockpit_sentinel.domain import RiskAssessment, RiskLevel
+from cockpit_sentinel.detection import (
+    DistractionAnalysis,
+    DistractionDetector,
+    load_distraction_config,
+)
+from cockpit_sentinel.domain import DriverSignals, RiskAssessment, RiskLevel
 from cockpit_sentinel.drowsiness import (
     DrowsinessAnalysis,
     DrowsinessDetector,
@@ -36,11 +41,18 @@ class FrameAnalyzer(Protocol):
     def analyze(self, frame: np.ndarray) -> DrowsinessAnalysis: ...
 
 
+class DistractionAnalyzer(Protocol):
+    """Object detector interface used by the live monitoring loop."""
+
+    def analyze(self, frame: np.ndarray) -> DistractionAnalysis: ...
+
+
 @dataclass(frozen=True, slots=True)
 class MonitorFrame:
     """One processed frame with detector output, risk result, and display image."""
 
     analysis: DrowsinessAnalysis
+    distraction: DistractionAnalysis | None
     assessment: RiskAssessment
     image: np.ndarray
 
@@ -48,15 +60,43 @@ class MonitorFrame:
 class LiveMonitor:
     """Combine face analysis and risk scoring for displayable video frames."""
 
-    def __init__(self, detector: FrameAnalyzer, policy: AlertPolicy) -> None:
+    def __init__(
+        self,
+        detector: FrameAnalyzer,
+        policy: AlertPolicy,
+        distraction_detector: DistractionAnalyzer | None = None,
+    ) -> None:
         self._detector = detector
         self._policy = policy
+        self._distraction_detector = distraction_detector
 
     def process(self, frame: np.ndarray) -> MonitorFrame:
         analysis = self._detector.analyze(frame)
-        assessment = self._policy.assess(analysis.signals)
+        distraction = None
+        if self._distraction_detector is not None:
+            distraction = self._distraction_detector.analyze(frame)
+        distraction_signals = distraction.signals if distraction else DriverSignals()
+        signals = merge_signals(analysis.signals, distraction_signals)
+        assessment = self._policy.assess(signals)
         image = draw_monitor_overlay(frame, analysis, assessment)
-        return MonitorFrame(analysis=analysis, assessment=assessment, image=image)
+        return MonitorFrame(
+            analysis=analysis,
+            distraction=distraction,
+            assessment=assessment,
+            image=image,
+        )
+
+
+def merge_signals(drowsiness: DriverSignals, distraction: DriverSignals) -> DriverSignals:
+    """Preserve fatigue signals while adding object-detection distraction signals."""
+
+    return DriverSignals(
+        eyes_closed=drowsiness.eyes_closed,
+        yawning=drowsiness.yawning,
+        looking_away=drowsiness.looking_away,
+        phone_detected=distraction.phone_detected,
+        smoking_detected=distraction.smoking_detected,
+    )
 
 
 def draw_monitor_overlay(
@@ -119,14 +159,19 @@ def draw_monitor_overlay(
     return image
 
 
-def run_live_monitor(source: int | str, detector: FrameAnalyzer, policy: AlertPolicy) -> None:
+def run_live_monitor(
+    source: int | str,
+    detector: FrameAnalyzer,
+    policy: AlertPolicy,
+    distraction_detector: DistractionAnalyzer | None = None,
+) -> None:
     """Open a webcam or video file and show processed frames until Q or Esc is pressed."""
 
     capture = cv2.VideoCapture(source)
     if not capture.isOpened():
         raise RuntimeError(f"Could not open video source: {source}")
 
-    monitor = LiveMonitor(detector, policy)
+    monitor = LiveMonitor(detector, policy, distraction_detector)
     try:
         while True:
             ok, frame = capture.read()
@@ -148,8 +193,8 @@ def parse_source(value: str) -> int | str:
     return int(value) if value.isdigit() else value
 
 
-def resolve_model_path() -> Path:
-    """Resolve the shared model store from the environment or local .env file."""
+def resolve_model_path(filename: str) -> Path:
+    """Resolve a shared model path from the environment or local .env file."""
 
     env_values = dotenv_values(REPO_ROOT / ".env")
     models_root = (
@@ -157,7 +202,7 @@ def resolve_model_path() -> Path:
         or env_values.get("COCKPIT_MODELS_ROOT")
         or "D:/CockpitSentinel/models"
     )
-    return Path(models_root) / "pretrained" / "face_landmarker.task"
+    return Path(models_root) / "pretrained" / filename
 
 
 def main() -> None:
@@ -165,14 +210,26 @@ def main() -> None:
     parser.add_argument(
         "--source", default="0", help="Webcam index or video file path (default: 0)."
     )
-    parser.add_argument("--model-path", type=Path, default=resolve_model_path())
+    parser.add_argument(
+        "--model-path", type=Path, default=resolve_model_path("face_landmarker.task")
+    )
+    parser.add_argument("--phone-model-path", type=Path, default=resolve_model_path("yolov8n.pt"))
+    parser.add_argument(
+        "--smoking-model-path", type=Path, default=resolve_model_path("yolov8s-worldv2.pt")
+    )
     args = parser.parse_args()
 
     drowsiness_config = load_drowsiness_config(REPO_ROOT / "configs" / "drowsiness.yaml")
+    distraction_config = load_distraction_config(REPO_ROOT / "configs" / "distraction.yaml")
     alert_policy = load_alert_policy(REPO_ROOT / "configs" / "alerts.yaml")
     print("Press Q or Esc to stop the monitor.")
     with DrowsinessDetector(args.model_path, drowsiness_config) as detector:
-        run_live_monitor(parse_source(args.source), detector, alert_policy)
+        distraction_detector = DistractionDetector(
+            args.phone_model_path,
+            args.smoking_model_path,
+            distraction_config,
+        )
+        run_live_monitor(parse_source(args.source), detector, alert_policy, distraction_detector)
 
 
 if __name__ == "__main__":

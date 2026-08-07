@@ -75,6 +75,8 @@ def run(
         cwd=REPO_ROOT,
         env=env,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=capture,
     )
 
@@ -148,22 +150,24 @@ def install_requirements() -> None:
     )
 
 
-def copy_yolo_weights(storage_root: Path) -> None:
-    target = storage_root / "models" / "pretrained" / "yolov8n.pt"
+def copy_ultralytics_asset(storage_root: Path, asset_name: str) -> None:
+    """Fetch an Ultralytics asset once and copy it into shared model storage."""
+
+    target = storage_root / "models" / "pretrained" / asset_name
     if target.exists():
-        print(f"[skip] pretrained weights already present: {target}")
+        print(f"[skip] pretrained asset already present: {target}")
         return
 
     python_code = (
         "from pathlib import Path; "
         "from ultralytics.utils.downloads import attempt_download_asset; "
-        "print(Path(attempt_download_asset('yolov8n.pt')).resolve())"
+        f"print(Path(attempt_download_asset('{asset_name}')).resolve())"
     )
     completed = run([str(VENV_PYTHON), "-c", python_code], capture=True)
     source = Path(completed.stdout.strip().splitlines()[-1])
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, target)
-    print(f"[ok] copied pretrained weights to {target}")
+    print(f"[ok] copied pretrained asset to {target}")
 
 
 def download_face_landmarker(storage_root: Path) -> None:
@@ -245,7 +249,8 @@ def main() -> int:
     storage_root = resolve_storage_root()
     ensure_storage_dirs(storage_root)
     install_requirements()
-    copy_yolo_weights(storage_root)
+    copy_ultralytics_asset(storage_root, "yolov8n.pt")
+    copy_ultralytics_asset(storage_root, "yolov8s-worldv2.pt")
     download_face_landmarker(storage_root)
     maybe_download_kaggle_datasets(storage_root)
     print("[done] environment bootstrap complete")

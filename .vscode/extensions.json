@@ -1,0 +1,14 @@
+{
+  "recommendations": [
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "ms-python.debugpy",
+    "ms-toolsai.jupyter",
+    "charliermarsh.ruff",
+    "redhat.vscode-yaml",
+    "github.vscode-pull-request-github",
+    "eamodio.gitlens",
+    "njpwerner.autodocstring",
+    "mechatroner.rainbow-csv"
+  ]
+}

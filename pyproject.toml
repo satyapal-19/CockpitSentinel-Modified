@@ -1,0 +1,47 @@
+[project]
+name = "cockpit-sentinel"
+version = "0.1.0"
+description = "Driver Monitoring System Using Computer Vision"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+license = { text = "MIT" }
+authors = [
+    { name = "Satyapal Gaikwad" },
+    { name = "Darshan Patil" },
+    { name = "Yashodhan Jadhav" },
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+    "pytest-cov>=5,<6",
+    "ruff>=0.8,<1",
+    "jupyterlab>=4,<5",
+    "mlflow>=2.18,<3",
+    "pip-tools>=7,<8",
+    "nbstripout>=0.7,<1",
+    "pip-audit>=2.7,<3",
+]
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.coverage.run]
+source = ["cockpit_sentinel"]
+omit = ["tests/*"]

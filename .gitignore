@@ -51,6 +51,20 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
+# Presentation and document artifacts
+*.pptx
+*.docx
+scratch_ppt_prompt.txt
+ppt_background_template.png
+
+# Weights directory (large model files downloaded at setup)
+weights/
+
+# Assets directory (generated logos, not source code)
+assets/
+
+# Documentation folder (large binary docs, keep local only)
+DOCUMENTATION AND PAPER WORK/
+
 # Reference PDF (keep local, optional in repo)
-# docs/reference/
 T3_B20_Ai Based Driver Monitoring System.pdf

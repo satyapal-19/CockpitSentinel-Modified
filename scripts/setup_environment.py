@@ -3,19 +3,24 @@
 from __future__ import annotations
 
 import os
+import platform
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 from urllib.request import urlretrieve
 
-from dotenv import dotenv_values
+try:
+    from dotenv import dotenv_values
+except ImportError:  # first run before deps are installed
+    dotenv_values = None  # type: ignore[assignment]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_STORAGE_ROOT = Path("D:/CockpitSentinel")
 ENV_FILE = REPO_ROOT / ".env"
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
-VENV_PYTHON = REPO_ROOT / ".venv" / "Scripts" / "python.exe"
+
+MIN_PYTHON = (3, 11)
+
 FACE_LANDMARKER_URL = (
     "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/"
     "float16/latest/face_landmarker.task"
@@ -65,6 +70,13 @@ STORAGE_RELATIVE_DIRS = [
 ]
 
 
+def _venv_python() -> Path:
+    """Return the path to the Python executable inside the virtual environment."""
+    if platform.system() == "Windows":
+        return REPO_ROOT / ".venv" / "Scripts" / "python.exe"
+    return REPO_ROOT / ".venv" / "bin" / "python"
+
+
 def run(
     command: list[str], *, env: dict[str, str] | None = None, capture: bool = False
 ) -> subprocess.CompletedProcess[str]:
@@ -83,8 +95,11 @@ def run(
 
 def check_python() -> None:
     version = sys.version_info
-    if (version.major, version.minor) != (3, 11):
-        raise SystemExit("Python 3.11 is required for this project setup.")
+    if (version.major, version.minor) < MIN_PYTHON:
+        raise SystemExit(
+            f"Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ is required "
+            f"(found {version.major}.{version.minor}.{version.micro})."
+        )
 
 
 def ensure_env_file() -> None:
@@ -102,11 +117,15 @@ def ensure_repo_dirs() -> None:
 
 
 def resolve_storage_root() -> Path:
-    values = dotenv_values(ENV_FILE) if ENV_FILE.exists() else {}
+    """Resolve the storage root from .env or default to the repo root."""
+    if dotenv_values is not None and ENV_FILE.exists():
+        values = dotenv_values(ENV_FILE)
+    else:
+        values = {}
     configured_root = values.get("COCKPIT_DATA_ROOT")
     if configured_root:
         return Path(configured_root)
-    return DEFAULT_STORAGE_ROOT
+    return REPO_ROOT
 
 
 def ensure_storage_dirs(storage_root: Path) -> None:
@@ -131,10 +150,10 @@ def ensure_storage_dirs(storage_root: Path) -> None:
 
 
 def install_requirements() -> None:
-    # Keep pip output compact so setup remains reliable in constrained terminals.
+    venv_python = _venv_python()
     run(
         [
-            str(VENV_PYTHON),
+            str(venv_python),
             "-m",
             "pip",
             "install",
@@ -152,18 +171,18 @@ def install_requirements() -> None:
 
 def copy_ultralytics_asset(storage_root: Path, asset_name: str) -> None:
     """Fetch an Ultralytics asset once and copy it into shared model storage."""
-
     target = storage_root / "models" / "pretrained" / asset_name
     if target.exists():
         print(f"[skip] pretrained asset already present: {target}")
         return
 
+    venv_python = _venv_python()
     python_code = (
         "from pathlib import Path; "
         "from ultralytics.utils.downloads import attempt_download_asset; "
         f"print(Path(attempt_download_asset('{asset_name}')).resolve())"
     )
-    completed = run([str(VENV_PYTHON), "-c", python_code], capture=True)
+    completed = run([str(venv_python), "-c", python_code], capture=True)
     source = Path(completed.stdout.strip().splitlines()[-1])
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, target)
@@ -172,7 +191,6 @@ def copy_ultralytics_asset(storage_root: Path, asset_name: str) -> None:
 
 def download_face_landmarker(storage_root: Path) -> None:
     """Download the MediaPipe asset once; retain existing shared model files."""
-
     target = storage_root / "models" / "pretrained" / "face_landmarker.task"
     if target.exists():
         print(f"[skip] face landmark model already present: {target}")
@@ -189,7 +207,10 @@ def download_face_landmarker(storage_root: Path) -> None:
 
 
 def kaggle_credentials() -> tuple[str | None, str | None]:
-    env_values = dotenv_values(ENV_FILE) if ENV_FILE.exists() else {}
+    if dotenv_values is not None and ENV_FILE.exists():
+        env_values = dotenv_values(ENV_FILE)
+    else:
+        env_values = {}
     username = os.environ.get("KAGGLE_USERNAME") or env_values.get("KAGGLE_USERNAME")
     key = os.environ.get("KAGGLE_KEY") or env_values.get("KAGGLE_KEY")
     return username, key
@@ -201,6 +222,7 @@ def maybe_download_kaggle_datasets(storage_root: Path) -> None:
         print("[skip] Kaggle credentials are not configured; dataset download skipped")
         return
 
+    venv_python = _venv_python()
     env = os.environ.copy()
     env["KAGGLE_USERNAME"] = username
     env["KAGGLE_KEY"] = key
@@ -215,7 +237,7 @@ def maybe_download_kaggle_datasets(storage_root: Path) -> None:
 
         if kind == "competitions":
             command = [
-                str(VENV_PYTHON),
+                str(venv_python),
                 "-m",
                 "kaggle",
                 "competitions",
@@ -227,7 +249,7 @@ def maybe_download_kaggle_datasets(storage_root: Path) -> None:
             ]
         else:
             command = [
-                str(VENV_PYTHON),
+                str(venv_python),
                 "-m",
                 "kaggle",
                 "datasets",

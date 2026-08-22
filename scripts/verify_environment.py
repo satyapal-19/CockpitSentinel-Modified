@@ -1,4 +1,4 @@
-"""Environment validation script — run after setup to confirm v0.1.0 readiness."""
+"""Environment validation script — run after setup to confirm readiness."""
 
 from __future__ import annotations
 
@@ -8,10 +8,12 @@ import platform
 import sys
 from pathlib import Path
 
+MIN_PYTHON = (3, 11)
+
 
 def check_python_version() -> tuple[bool, str]:
     v = sys.version_info
-    ok = v.major == 3 and v.minor == 11
+    ok = (v.major, v.minor) >= MIN_PYTHON
     return ok, f"{v.major}.{v.minor}.{v.micro}"
 
 
@@ -46,7 +48,7 @@ def check_env_vars() -> list[tuple[str, bool, str]]:
             exists = Path(val).exists() if not val.startswith("file:") else True
             results.append((var, exists, val))
         else:
-            results.append((var, False, "not set"))
+            results.append((var, False, "not set (using defaults)"))
     return results
 
 
@@ -69,7 +71,8 @@ def main() -> int:
 
     ok, ver = check_python_version()
     status = "PASS" if ok else "FAIL"
-    print(f"[{status}] Python version: {ver} (required: 3.11.x)")
+    min_ver = f"{MIN_PYTHON[0]}.{MIN_PYTHON[1]}"
+    print(f"[{status}] Python version: {ver} (required: >= {min_ver})")
 
     print("\n--- Package imports ---")
     all_ok = ok
@@ -80,7 +83,7 @@ def main() -> int:
 
     print("\n--- Environment variables ---")
     for var, passed, msg in check_env_vars():
-        status = "PASS" if passed else "WARN"
+        status = "PASS" if passed else "INFO"
         print(f"[{status}] {var}: {msg}")
 
     print(f"\n--- GPU ---\n{check_gpu()}")

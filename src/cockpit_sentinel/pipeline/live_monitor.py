@@ -200,7 +200,7 @@ def resolve_model_path(filename: str) -> Path:
     models_root = (
         os.environ.get("COCKPIT_MODELS_ROOT")
         or env_values.get("COCKPIT_MODELS_ROOT")
-        or "D:/CockpitSentinel/models"
+        or str(REPO_ROOT / "models")
     )
     return Path(models_root) / "pretrained" / filename
 

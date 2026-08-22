@@ -1,41 +1,70 @@
 # Windows Setup
 
-This repository is currently a setup scaffold for the driver monitoring system described
-in the synopsis PDF. It prepares the environment, storage, baseline dependencies, and starter assets
-without claiming the monitoring application itself is complete.
+## Prerequisites
 
-## What The Setup Does
+- Python 3.11 or newer (install from [python.org](https://www.python.org/downloads/))
+- Git
 
-- creates or reuses the local `.venv`
-- installs Python dependencies from the project requirement files
-- creates the expected project storage under `D:\CockpitSentinel`
-- prepares dataset folders for NTHU, YawDD, State Farm, and extra Kaggle experiments
-- downloads `yolov8n.pt` once into `D:\CockpitSentinel\models\pretrained`
-- preserves anything that already exists
+Make sure `python --version` or `py --version` works in PowerShell.
 
-## First-Time Use
+## First-Time Setup
 
 ```powershell
+git clone <repository-url>
+cd CockpitSentinel
 .\scripts\setup_environment.ps1
 ```
 
+This will:
+- Create a `.venv` virtual environment
+- Copy `.env.example` to `.env` (if `.env` doesn't exist yet)
+- Install all dependencies from `requirements.txt`
+- Download pretrained models (YOLOv8, YOLOWorld, MediaPipe Face Landmarker)
+- Set up the data directory structure
+
+By default, all data and models are stored inside the repository under `data/`, `models/`,
+and `experiments/`. These directories are git-ignored.
+
+To use a custom storage path, edit `.env`:
+
+```ini
+COCKPIT_DATA_ROOT=E:\MyData\CockpitSentinel
+COCKPIT_MODELS_ROOT=E:\MyData\CockpitSentinel\models
+```
+
+## Running the Monitor
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+cockpit-sentinel
+```
+
+Or:
+
+```powershell
+python scripts\run_drowsiness_monitor.py
+```
+
+> **Important:** Do NOT run `.py` files directly (e.g. `.\scripts\run_drowsiness_monitor.py`).
+> On Windows this may open your code editor instead of executing the script.
+
 ## Dataset Downloads
 
-Several datasets referenced in the synopsis are distributed through Kaggle and require credentials.
-Add these to `.env` before re-running the setup if you want automatic downloads:
+Several datasets are distributed through Kaggle and require credentials.
+Add these to `.env` before re-running the setup:
 
-```env
+```ini
 KAGGLE_USERNAME=your_username
 KAGGLE_KEY=your_api_key
 ```
 
-If credentials are missing, the setup still prepares the correct folder structure and leaves
-manifest files behind so the team can add the archives manually later.
+If credentials are missing, the setup still creates the folder structure with manifest files
+so archives can be added manually.
 
 ## Verification
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-python .\scripts\verify_environment.py
+python scripts\verify_environment.py
 pytest
 ```

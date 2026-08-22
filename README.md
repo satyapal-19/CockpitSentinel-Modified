@@ -20,12 +20,12 @@
 
 ## Features
 
-| Module | What It Detects | How |
-|---|---|---|
-| **Drowsiness** | Eye closure, yawning, looking away | MediaPipe Face Landmarker → EAR, MAR, head yaw |
-| **Distraction** | Phone use, smoking | YOLOv8 + YOLOWorld object detection |
-| **Risk Scoring** | 4-level risk assessment | Weighted signal fusion → SAFE / CAUTION / WARNING / CRITICAL |
-| **Stabilization** | False alarm reduction | Signals must persist for 3+ consecutive frames |
+| Module                  | What It Detects                    | How                                                           |
+| ----------------------- | ---------------------------------- | ------------------------------------------------------------- |
+| **Drowsiness**    | Eye closure, yawning, looking away | MediaPipe Face Landmarker → EAR, MAR, head yaw               |
+| **Distraction**   | Phone use, smoking                 | YOLOv8 + YOLOWorld object detection                           |
+| **Risk Scoring**  | 4-level risk assessment            | Weighted signal fusion → SAFE / CAUTION / WARNING / CRITICAL |
+| **Stabilization** | False alarm reduction              | Signals must persist for 3+ consecutive frames                |
 
 ## Architecture
 
@@ -106,6 +106,7 @@ cockpit-sentinel
 ```
 
 The setup script will:
+
 - Create a `.venv` virtual environment using your system Python
 - Copy `.env.example` → `.env` (if `.env` doesn't exist yet)
 - Install all dependencies
@@ -141,6 +142,7 @@ Press **Q** or **Esc** to stop the monitor.
 ### What You'll See
 
 The monitor displays a live video feed with an overlay showing:
+
 - **Risk level** and score (color-coded)
 - **Active signals** (e.g., "yawning", "phone detected")
 - **Real-time metrics** — EAR, MAR, and head yaw angle
@@ -149,23 +151,23 @@ The monitor displays a live video feed with an overlay showing:
 
 All runtime settings live in [`configs/`](configs/):
 
-| File | Controls |
-|---|---|
-| [`drowsiness.yaml`](configs/drowsiness.yaml) | EAR/MAR thresholds, head yaw limit, frame stabilization |
-| [`distraction.yaml`](configs/distraction.yaml) | Phone/smoking confidence thresholds, smoking labels |
-| [`alerts.yaml`](configs/alerts.yaml) | Signal weights and risk level thresholds |
-| [`models.yaml`](configs/models.yaml) | Model paths and registry |
-| [`logging.yaml`](configs/logging.yaml) | Log format, rotation, and output |
+| File                                            | Controls                                                |
+| ----------------------------------------------- | ------------------------------------------------------- |
+| [`drowsiness.yaml`](configs/drowsiness.yaml)   | EAR/MAR thresholds, head yaw limit, frame stabilization |
+| [`distraction.yaml`](configs/distraction.yaml) | Phone/smoking confidence thresholds, smoking labels     |
+| [`alerts.yaml`](configs/alerts.yaml)           | Signal weights and risk level thresholds                |
+| [`models.yaml`](configs/models.yaml)           | Model paths and registry                                |
+| [`logging.yaml`](configs/logging.yaml)         | Log format, rotation, and output                        |
 
 ### Risk Scoring
 
-| Signal | Weight | Threshold |
-|---|---|---|
-| Eyes closed | 3 | EAR < 0.22 |
-| Yawning | 2 | MAR > 0.60 |
-| Looking away | 2 | Head yaw > 30° |
-| Phone detected | 4 | Confidence > 0.35 |
-| Smoking detected | 3 | Confidence > 0.20 |
+| Signal           | Weight | Threshold         |
+| ---------------- | ------ | ----------------- |
+| Eyes closed      | 3      | EAR < 0.22        |
+| Yawning          | 2      | MAR > 0.60        |
+| Looking away     | 2      | Head yaw > 30°   |
+| Phone detected   | 4      | Confidence > 0.35 |
+| Smoking detected | 3      | Confidence > 0.20 |
 
 **Risk levels:** SAFE (< 2) · CAUTION (≥ 2) · WARNING (≥ 4) · CRITICAL (≥ 6)
 
@@ -228,15 +230,15 @@ CockpitSentinel/
 
 The `.env` file is optional. If unset, everything defaults to the repo directory.
 
-| Variable | Purpose | Default |
-|---|---|---|
-| `COCKPIT_DATA_ROOT` | Root directory for datasets and storage | _(repo directory)_ |
-| `COCKPIT_MODELS_ROOT` | Root directory for model files | _(repo directory)/models_ |
-| `MLFLOW_TRACKING_URI` | MLflow experiment store | _(repo directory)/experiments/mlruns_ |
-| `LOG_LEVEL` | Application log level | `INFO` |
-| `WEBCAM_INDEX` | Default webcam device | `0` |
-| `KAGGLE_USERNAME` | Kaggle API username | _(empty)_ |
-| `KAGGLE_KEY` | Kaggle API key | _(empty)_ |
+| Variable                | Purpose                                 | Default                                 |
+| ----------------------- | --------------------------------------- | --------------------------------------- |
+| `COCKPIT_DATA_ROOT`   | Root directory for datasets and storage | _(repo directory)_                    |
+| `COCKPIT_MODELS_ROOT` | Root directory for model files          | _(repo directory)/models_             |
+| `MLFLOW_TRACKING_URI` | MLflow experiment store                 | _(repo directory)/experiments/mlruns_ |
+| `LOG_LEVEL`           | Application log level                   | `INFO`                                |
+| `WEBCAM_INDEX`        | Default webcam device                   | `0`                                   |
+| `KAGGLE_USERNAME`     | Kaggle API username                     | _(empty)_                             |
+| `KAGGLE_KEY`          | Kaggle API key                          | _(empty)_                             |
 
 ## NVIDIA GPU Setup
 

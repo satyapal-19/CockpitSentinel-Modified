@@ -132,18 +132,46 @@ class SignalStabilizer:
 class DrowsinessDetector:
     """Extract eye, mouth, and head-direction signals from BGR OpenCV frames."""
 
-    def __init__(self, model_path: Path, config: DrowsinessConfig | None = None) -> None:
+    def __init__(
+        self,
+        model_path: Path,
+        config: DrowsinessConfig | None = None,
+        delegate: str | None = None,
+    ) -> None:
         if not model_path.exists():
             raise FileNotFoundError(f"Face landmark model was not found: {model_path}")
 
         self.config = config or DrowsinessConfig()
+        self.delegate_name = delegate or "cpu"
+        self._landmarker = self._create_landmarker(model_path, self.delegate_name)
+        self._stabilizer = SignalStabilizer(self.config.minimum_consecutive_frames)
+
+    @staticmethod
+    def _create_landmarker(model_path: Path, delegate: str) -> vision.FaceLandmarker:
+        delegate_choice = delegate.strip().lower()
+        if delegate_choice in ("gpu", "cuda"):
+            try:
+                options = vision.FaceLandmarkerOptions(
+                    base_options=BaseOptions(
+                        model_asset_path=str(model_path),
+                        delegate=BaseOptions.Delegate.GPU,
+                    ),
+                    running_mode=vision.RunningMode.IMAGE,
+                    num_faces=1,
+                )
+                return vision.FaceLandmarker.create_from_options(options)
+            except Exception:
+                pass
+
         options = vision.FaceLandmarkerOptions(
-            base_options=BaseOptions(model_asset_path=str(model_path)),
+            base_options=BaseOptions(
+                model_asset_path=str(model_path),
+                delegate=BaseOptions.Delegate.CPU,
+            ),
             running_mode=vision.RunningMode.IMAGE,
             num_faces=1,
         )
-        self._landmarker = vision.FaceLandmarker.create_from_options(options)
-        self._stabilizer = SignalStabilizer(self.config.minimum_consecutive_frames)
+        return vision.FaceLandmarker.create_from_options(options)
 
     def close(self) -> None:
         self._landmarker.close()

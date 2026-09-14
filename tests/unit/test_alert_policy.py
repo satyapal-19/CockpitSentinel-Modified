@@ -1,15 +1,14 @@
 """Tests for configurable alert policy behavior."""
 
-from pathlib import Path
-
 import pytest
 
 from cockpit_sentinel.alerts.policy import PolicyConfigurationError, load_alert_policy
 from cockpit_sentinel.domain import DriverSignals, RiskLevel
+from cockpit_sentinel.utils.paths import resolve_config_path
 
 
 def test_committed_alert_policy_scores_phone_detection():
-    policy = load_alert_policy(Path("configs/alerts.yaml"))
+    policy = load_alert_policy(resolve_config_path("alerts.yaml"))
 
     assessment = policy.assess(DriverSignals(phone_detected=True))
 

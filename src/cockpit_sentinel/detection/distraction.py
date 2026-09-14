@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,7 @@ import yaml
 from ultralytics import YOLO, YOLOWorld
 
 from cockpit_sentinel.domain import DriverSignals
+from cockpit_sentinel.utils.device import resolve_device
 
 
 class ObjectDetector(Protocol):
@@ -79,10 +81,24 @@ class DistractionDetector:
         *,
         phone_model: ObjectDetector | None = None,
         smoking_model: ObjectDetector | None = None,
+        device: str | None = None,
     ) -> None:
         self.config = config or DistractionConfig()
-        self._phone_model = phone_model or self._load_phone_model(phone_model_path)
-        self._smoking_model = smoking_model or self._load_smoking_model(smoking_model_path)
+        self.device = resolve_device(device) if device is not None else None
+        self._phone_model = phone_model or self._load_phone_model(phone_model_path, self.device)
+        self._smoking_model = smoking_model or self._load_smoking_model(
+            smoking_model_path, self.device
+        )
+
+    def close(self) -> None:
+        """Release any device or model resources."""
+        pass
+
+    def __enter__(self) -> DistractionDetector:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
 
     def analyze(self, frame: np.ndarray) -> DistractionAnalysis:
         """Run both object detectors and return only the relevant risk signals."""
@@ -90,13 +106,19 @@ class DistractionDetector:
         if frame.ndim != 3 or frame.shape[2] != 3:
             raise ValueError("Expected a three-channel BGR frame.")
 
+        predict_kwargs: dict[str, Any] = {"verbose": False}
+        if self.device is not None:
+            predict_kwargs["device"] = self.device
+
         phone_confidence = _highest_confidence(
-            self._phone_model(frame, conf=self.config.phone_confidence_threshold, verbose=False),
+            self._phone_model(
+                frame, conf=self.config.phone_confidence_threshold, **predict_kwargs
+            ),
             {"cell phone"},
         )
         smoking_confidence = _highest_confidence(
             self._smoking_model(
-                frame, conf=self.config.smoking_confidence_threshold, verbose=False
+                frame, conf=self.config.smoking_confidence_threshold, **predict_kwargs
             ),
             set(self.config.smoking_labels),
         )
@@ -110,16 +132,23 @@ class DistractionDetector:
         )
 
     @staticmethod
-    def _load_phone_model(path: Path) -> YOLO:
+    def _load_phone_model(path: Path, device: str | None = None) -> YOLO:
         if not path.exists():
             raise FileNotFoundError(f"Phone detection model was not found: {path}")
-        return YOLO(path)
+        model = YOLO(path)
+        if device is not None:
+            with contextlib.suppress(Exception):
+                model.to(device)
+        return model
 
-    def _load_smoking_model(self, path: Path) -> YOLOWorld:
+    def _load_smoking_model(self, path: Path, device: str | None = None) -> YOLOWorld:
         if not path.exists():
             raise FileNotFoundError(f"Smoking detection model was not found: {path}")
         model = YOLOWorld(path)
         model.set_classes(list(self.config.smoking_labels))
+        if device is not None:
+            with contextlib.suppress(Exception):
+                model.to(device)
         return model
 
 

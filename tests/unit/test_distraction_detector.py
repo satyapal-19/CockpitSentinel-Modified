@@ -50,3 +50,20 @@ def test_distraction_detector_combines_phone_and_smoking_detections():
 def test_distraction_config_rejects_invalid_confidence():
     with pytest.raises(ValueError, match="between 0 and 1"):
         DistractionConfig(phone_confidence_threshold=0)
+
+
+def test_distraction_detector_supports_device_and_context_manager():
+    phone_model = FakeModel(FakeResult({67: "cell phone"}, []))
+    smoking_model = FakeModel(FakeResult({0: "cigarette"}, []))
+
+    with DistractionDetector(
+        Path("phone.pt"),
+        Path("smoking.pt"),
+        phone_model=phone_model,
+        smoking_model=smoking_model,
+        device="cpu",
+    ) as detector:
+        assert detector.device == "cpu"
+        analysis = detector.analyze(np.zeros((120, 160, 3), dtype=np.uint8))
+        assert not analysis.signals.phone_detected
+        assert not analysis.signals.smoking_detected

@@ -1,4 +1,4 @@
-# Model registry — paths point to D: drive (see COCKPIT_MODELS_ROOT)
+# Model registry — paths dynamically resolve via COCKPIT_MODELS_ROOT or local models directory
 
 pretrained:
   face_landmarker:

@@ -10,7 +10,6 @@ from typing import Protocol
 
 import cv2
 import numpy as np
-from dotenv import dotenv_values
 
 from cockpit_sentinel.alerts.policy import AlertPolicy, load_alert_policy
 from cockpit_sentinel.detection import (
@@ -24,8 +23,16 @@ from cockpit_sentinel.drowsiness import (
     DrowsinessDetector,
     load_drowsiness_config,
 )
+from cockpit_sentinel.utils.device import resolve_device
+from cockpit_sentinel.utils.paths import (
+    find_project_root,
+    resolve_config_path,
+)
+from cockpit_sentinel.utils.paths import (
+    resolve_model_path as _resolve_model_path,
+)
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = find_project_root()
 WINDOW_TITLE = "CockpitSentinel - Drowsiness Monitor"
 RISK_COLORS = {
     RiskLevel.SAFE: (61, 153, 112),
@@ -193,16 +200,9 @@ def parse_source(value: str) -> int | str:
     return int(value) if value.isdigit() else value
 
 
-def resolve_model_path(filename: str) -> Path:
+def resolve_model_path(filename: str, models_root: Path | None = None) -> Path:
     """Resolve a shared model path from the environment or local .env file."""
-
-    env_values = dotenv_values(REPO_ROOT / ".env")
-    models_root = (
-        os.environ.get("COCKPIT_MODELS_ROOT")
-        or env_values.get("COCKPIT_MODELS_ROOT")
-        or str(REPO_ROOT / "models")
-    )
-    return Path(models_root) / "pretrained" / filename
+    return _resolve_model_path(filename, models_root=models_root)
 
 
 def main() -> None:
@@ -211,25 +211,121 @@ def main() -> None:
         "--source", default="0", help="Webcam index or video file path (default: 0)."
     )
     parser.add_argument(
-        "--model-path", type=Path, default=resolve_model_path("face_landmarker.task")
+        "--device",
+        default=os.environ.get("COCKPIT_DEVICE", "auto"),
+        help="Inference compute device: 'auto', 'cpu', 'cuda', 'cuda:0', 'mps' (default: auto).",
     )
-    parser.add_argument("--phone-model-path", type=Path, default=resolve_model_path("yolov8n.pt"))
     parser.add_argument(
-        "--smoking-model-path", type=Path, default=resolve_model_path("yolov8s-worldv2.pt")
+        "--models-root",
+        type=Path,
+        default=None,
+        help="Optional root directory containing pretrained models.",
+    )
+    parser.add_argument(
+        "--model-path",
+        type=Path,
+        default=None,
+        help="Path to MediaPipe face landmarker model (.task).",
+    )
+    parser.add_argument(
+        "--phone-model-path",
+        type=Path,
+        default=None,
+        help="Path to YOLO phone detection model (.pt).",
+    )
+    parser.add_argument(
+        "--smoking-model-path",
+        type=Path,
+        default=None,
+        help="Path to YOLOWorld smoking detection model (.pt).",
+    )
+    parser.add_argument(
+        "--config-dir",
+        type=Path,
+        default=None,
+        help="Directory containing YAML configuration files.",
+    )
+    parser.add_argument(
+        "--drowsiness-config",
+        type=Path,
+        default=None,
+        help="Path to drowsiness YAML configuration file.",
+    )
+    parser.add_argument(
+        "--distraction-config",
+        type=Path,
+        default=None,
+        help="Path to distraction YAML configuration file.",
+    )
+    parser.add_argument(
+        "--alert-policy",
+        type=Path,
+        default=None,
+        help="Path to alert policy YAML configuration file.",
     )
     args = parser.parse_args()
 
-    drowsiness_config = load_drowsiness_config(REPO_ROOT / "configs" / "drowsiness.yaml")
-    distraction_config = load_distraction_config(REPO_ROOT / "configs" / "distraction.yaml")
-    alert_policy = load_alert_policy(REPO_ROOT / "configs" / "alerts.yaml")
-    print("Press Q or Esc to stop the monitor.")
-    with DrowsinessDetector(args.model_path, drowsiness_config) as detector:
-        distraction_detector = DistractionDetector(
-            args.phone_model_path,
-            args.smoking_model_path,
-            distraction_config,
+    model_path = args.model_path or resolve_model_path("face_landmarker.task", args.models_root)
+    phone_model_path = args.phone_model_path or resolve_model_path("yolov8n.pt", args.models_root)
+    smoking_model_path = args.smoking_model_path or resolve_model_path(
+        "yolov8s-worldv2.pt", args.models_root
+    )
+
+    # Check for missing model files before loading to provide helpful instructions
+    missing_models: list[str] = []
+    for name, path in [
+        ("Face Landmarker", model_path),
+        ("Phone Detector", phone_model_path),
+        ("Smoking Detector", smoking_model_path),
+    ]:
+        if not path.exists():
+            missing_models.append(f"  - {name}: {path}")
+
+    if missing_models:
+        print("\n[ERROR] Required model file(s) not found:")
+        for line in missing_models:
+            print(line)
+        print("\nPlease run the setup script to download models:")
+        print("  python scripts/setup_environment.py")
+        print(
+            "Or specify custom model paths via CLI flags "
+            "(--model-path, --phone-model-path, etc.).\n"
         )
-        run_live_monitor(parse_source(args.source), detector, alert_policy, distraction_detector)
+        raise SystemExit(1)
+
+    drowsiness_cfg_path = resolve_config_path(
+        "drowsiness.yaml", custom_dir=args.config_dir, explicit_file=args.drowsiness_config
+    )
+    distraction_cfg_path = resolve_config_path(
+        "distraction.yaml", custom_dir=args.config_dir, explicit_file=args.distraction_config
+    )
+    alerts_cfg_path = resolve_config_path(
+        "alerts.yaml", custom_dir=args.config_dir, explicit_file=args.alert_policy
+    )
+
+    drowsiness_config = load_drowsiness_config(drowsiness_cfg_path)
+    distraction_config = load_distraction_config(distraction_cfg_path)
+    alert_policy = load_alert_policy(alerts_cfg_path)
+
+    target_device = resolve_device(args.device)
+    print(f"CockpitSentinel starting on device: {target_device}")
+    print("Press Q or Esc in the video window to stop.")
+
+    try:
+        with (
+            DrowsinessDetector(model_path, drowsiness_config, delegate=target_device) as detector,
+            DistractionDetector(
+                phone_model_path,
+                smoking_model_path,
+                distraction_config,
+                device=target_device,
+            ) as distraction_detector,
+        ):
+            run_live_monitor(
+                parse_source(args.source), detector, alert_policy, distraction_detector
+            )
+    except KeyboardInterrupt:
+        print("\nMonitor interrupted by user. Exiting cleanly.")
 
 
 if __name__ == "__main__":

@@ -100,6 +100,13 @@ def check_python() -> None:
             f"Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ is required "
             f"(found {version.major}.{version.minor}.{version.micro})."
         )
+    if (version.major, version.minor) >= (3, 13):
+        print(
+            f"[warn] Python {version.major}.{version.minor}.{version.micro} detected. "
+            "CockpitSentinel pinned dependencies (numpy 1.x, mediapipe 0.10.x) are optimized "
+            "for Python 3.11 and 3.12. If dependency installation encounters missing wheels, "
+            "please use Python 3.11 or 3.12."
+        )
 
 
 def ensure_env_file() -> None:
@@ -118,10 +125,7 @@ def ensure_repo_dirs() -> None:
 
 def resolve_storage_root() -> Path:
     """Resolve the storage root from .env or default to the repo root."""
-    if dotenv_values is not None and ENV_FILE.exists():
-        values = dotenv_values(ENV_FILE)
-    else:
-        values = {}
+    values = dotenv_values(ENV_FILE) if dotenv_values is not None and ENV_FILE.exists() else {}
     configured_root = values.get("COCKPIT_DATA_ROOT")
     if configured_root:
         return Path(configured_root)
@@ -207,10 +211,7 @@ def download_face_landmarker(storage_root: Path) -> None:
 
 
 def kaggle_credentials() -> tuple[str | None, str | None]:
-    if dotenv_values is not None and ENV_FILE.exists():
-        env_values = dotenv_values(ENV_FILE)
-    else:
-        env_values = {}
+    env_values = dotenv_values(ENV_FILE) if dotenv_values is not None and ENV_FILE.exists() else {}
     username = os.environ.get("KAGGLE_USERNAME") or env_values.get("KAGGLE_USERNAME")
     key = os.environ.get("KAGGLE_KEY") or env_values.get("KAGGLE_KEY")
     return username, key

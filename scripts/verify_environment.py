@@ -8,6 +8,10 @@ import platform
 import sys
 from pathlib import Path
 
+# Ensure src is on pythonpath
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT / "src"))
+
 MIN_PYTHON = (3, 11)
 
 
@@ -54,13 +58,36 @@ def check_env_vars() -> list[tuple[str, bool, str]]:
 
 def check_gpu() -> str:
     try:
-        import torch
+        from cockpit_sentinel.utils.device import get_device_diagnostic_info
 
-        if torch.cuda.is_available():
-            return f"CUDA available: {torch.cuda.get_device_name(0)}"
-        return "CUDA not available (CPU mode)"
-    except ImportError:
-        return "PyTorch not installed yet"
+        diag = get_device_diagnostic_info()
+        lines = []
+        if diag.get("cuda_available"):
+            lines.append(
+                f"CUDA available: {diag.get('cuda_device_name')} (CUDA {diag.get('cuda_version')})"
+            )
+            mem = diag.get("cuda_memory")
+            if mem:
+                lines.append(
+                    f"  VRAM: {mem.get('total_gb')} GB total "
+                    f"({mem.get('allocated_gb')} GB allocated)"
+                )
+        elif diag.get("mps_available"):
+            lines.append("Apple Silicon MPS (Metal Performance Shaders) available")
+        else:
+            lines.append("No GPU acceleration available (CPU mode)")
+
+        lines.append(f"Default inference device: {diag.get('resolved_default')}")
+        return "\n".join(lines)
+    except Exception:
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                return f"CUDA available: {torch.cuda.get_device_name(0)}"
+            return "CUDA not available (CPU mode)"
+        except ImportError:
+            return "PyTorch not installed yet"
 
 
 def main() -> int:
@@ -73,6 +100,12 @@ def main() -> int:
     status = "PASS" if ok else "FAIL"
     min_ver = f"{MIN_PYTHON[0]}.{MIN_PYTHON[1]}"
     print(f"[{status}] Python version: {ver} (required: >= {min_ver})")
+    v = sys.version_info
+    if (v.major, v.minor) >= (3, 13):
+        print(
+            "  [NOTE] Python 3.13 detected. Pinned dependencies (numpy 1.x, mediapipe 0.10.x) "
+            "are officially tested on Python 3.11-3.12."
+        )
 
     print("\n--- Package imports ---")
     all_ok = ok
@@ -86,7 +119,7 @@ def main() -> int:
         status = "PASS" if passed else "INFO"
         print(f"[{status}] {var}: {msg}")
 
-    print(f"\n--- GPU ---\n{check_gpu()}")
+    print(f"\n--- Hardware & Acceleration ---\n{check_gpu()}")
 
     print("\n" + "=" * 60)
     if all_ok:

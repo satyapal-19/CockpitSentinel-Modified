@@ -24,6 +24,9 @@
 
 | Module | What It Detects / Solves | How It Works |
 | :--- | :--- | :--- |
+| **Auto Driver Recognition** | Personalized baseline & multi-driver identity | 20-D normalized bone distance signature matching ($\ge 92\%$); auto-binds personalized thresholds upon startup |
+| **3s Auto-Calibration** | Custom EAR & MAR thresholds per facial anatomy | 3-second baseline capture computes optimal thresholds ($\text{EAR}_{th} = \mu \times 0.70$, $\text{MAR}_{th} = \mu \times 2.80$) |
+| **Telematics Web Dashboard** | Real-time monitoring & profile management | FastAPI + WebSockets HUD, live video feed, real-time gauges, profile manager, and interactive boundary sliders |
 | **P80 PERCLOS & Micro-Sleep** | Progressive fatigue & acute micro-sleeps | Rolling 30s/60s temporal sliding window; $>1.5\text{s}$ continuous eye closure triggers immediate `CRITICAL` |
 | **Speech vs. Yawn Discrimination** | Distinguishes conversational speech from yawns | Temporal derivative $\frac{d(\text{MAR})}{dt}$ and oscillation frequency analysis over a rolling buffer |
 | **Sunglasses Occlusion Fallback** | Detects dark/polarized sunglasses and glare | Eye ROI luminance contrast variance ($\sigma < 12.0$); transitions to secondary indicators (head pitch droop & yawns) |
@@ -63,6 +66,24 @@
     * Automatically elevates **Secondary Fatigue Indicators**:
       1. **3D Head Nodding / Micro-droops (`head_nodding`)**: Downward head tilt ($\text{pitch} \ge 15^\circ$) or cyclic nods trigger immediate alert escalation.
       2. **Mouth Yawning (`yawning`)**: Monitored via visible mouth landmarks with speech filtering.
+
+### 4. Auto Driver Recognition & Multi-Driver Profiles
+* **The Problem:** Generic thresholds fail across diverse drivers. A driver with naturally narrow eyes will suffer false drowsiness alarms under static $0.22$ EAR, while a driver with wide eyes might be drowsy at $0.24$.
+* **The Solution (`DriverRecognizer` & `ProfileManager`):**
+  * **Privacy-First Bone Distance Signatures:** Instead of saving unencrypted face images, CockpitSentinel extracts a 20-dimensional scale-invariant geometric ratio vector:
+    $$\vec{S} = \left[ \frac{\|\mathbf{p}_{i} - \mathbf{p}_{j}\|_2}{D_{\text{interocular}}} \right] \quad (i, j \in \text{key facial bone landmarks})$$
+  * **Seamless Startup Recognition:** During the first 60 frames after ignition/start, the recognizer calculates cosine similarity against enrolled profiles ($\ge 0.92$ match confidence):
+    $$\text{Cosine Similarity} = \frac{\vec{u} \cdot \vec{v}}{\|\vec{u}\|_2 \|\vec{v}\|_2}$$
+  * **Zero-Intervention Threshold Binding:** Once recognized, the monitor dynamically swaps active thresholds (`ear_threshold`, `mar_threshold`, `head_pitch`) to match the identified driver's personal anatomy.
+
+### 5. One-Click 3-Second Auto-Calibration
+* **The Problem:** Drivers shouldn't need to manually guess or tweak numerical ratios in configuration files.
+* **The Solution:**
+  * Driver sits comfortably in normal driving posture for 3 seconds (90 frames).
+  * CockpitSentinel calculates resting geometry baselines ($\mu_{\text{EAR}}$, $\mu_{\text{MAR}}$) and derives custom bounds:
+    $$\text{EAR}_{\text{threshold}} = \max\left(0.14, \min(0.28, \mu_{\text{EAR}} \times 0.70)\right)$$
+    $$\text{MAR}_{\text{threshold}} = \max\left(0.52, \min(0.75, \mu_{\text{MAR}} \times 2.80)\right)$$
+  * Updates disk persistence (`data/profiles.json`) and binds immediately into the live pipeline.
 
 ---
 
@@ -143,11 +164,14 @@ cd CockpitSentinelAntigravity
 .\.venv\Scripts\Activate.ps1
 python scripts\verify_environment.py
 
-# Run test suite (65 passing unit tests)
+# Run test suite (78 passing unit tests)
 pytest --cov=cockpit_sentinel
 
-# Launch the live monitor
+# Launch the live desktop monitor
 python -m cockpit_sentinel.pipeline.live_monitor
+
+# Or launch the Telematics Web Dashboard
+python scripts/run_dashboard.py
 ```
 
 ### 2. macOS / Linux Setup
@@ -167,8 +191,20 @@ python -m cockpit_sentinel.pipeline.live_monitor
 
 ## Usage & CLI Options
 
+### 1. Telematics Web Dashboard (Recommended)
+
 ```bash
-# Default webcam live monitoring (with 3-tier audio alerts)
+# Launch dashboard at http://127.0.0.1:8000
+python scripts/run_dashboard.py
+
+# Custom host, port, or video source
+python scripts/run_dashboard.py --host 0.0.0.0 --port 8000 --source 0 --device cuda
+```
+
+### 2. Desktop HUD Monitor
+
+```bash
+# Default webcam live monitoring (with 3-tier audio alerts & auto driver recognition)
 python -m cockpit_sentinel.pipeline.live_monitor
 
 # Run with custom video file
@@ -211,6 +247,7 @@ CockpitSentinelAntigravity/
 │   ├── drowsiness.yaml           #   EAR, MAR, PERCLOS, speech & pitch limits
 │   └── models.yaml               #   Model asset registry
 ├── scripts/                      # Bootstrap and validation utilities
+│   ├── run_dashboard.py          #   Telematics Web Dashboard launcher
 │   ├── run_drowsiness_monitor.py #   Convenience launcher script
 │   ├── setup_environment.ps1     #   Windows setup bootstrap
 │   ├── setup.sh                  #   Unix setup bootstrap
@@ -219,18 +256,23 @@ CockpitSentinelAntigravity/
 │   ├── alerts/                   #   Policy scoring and audio escalation
 │   │   ├── audio.py              #     Non-blocking 3-tier AudioManager
 │   │   └── policy.py             #     Weighted assessment engine
+│   ├── dashboard/                #   Telematics Web Dashboard (FastAPI)
+│   │   ├── templates/index.html  #     Real-time HTML5/Tailwind dashboard UI
+│   │   └── app.py                #     REST & WebSocket telemetry server
 │   ├── detection/                #   Object detection (YOLOv8 + YOLOWorld)
 │   ├── drowsiness/               #   MediaPipe geometry & fatigue trackers
 │   │   ├── detector.py           #     FaceLandmarker, EAR, MAR & Head pose
 │   │   ├── occlusion.py          #     Sunglasses & eye contrast detector
+│   │   ├── recognition.py        #     Biometric face recognition & profiles
 │   │   └── yawn_speech.py        #     Speech vs. Yawn discriminator
 │   ├── pipeline/                 #   Live video capture and HUD rendering
 │   │   └── live_monitor.py       #     LiveMonitor frame loop & overlay
 │   ├── utils/                    #   Cross-device, GPU resolution & paths
 │   └── domain.py                 #   Shared dataclasses, signals & contracts
-├── tests/unit/                   # Comprehensive unit test suite (65 tests)
+├── tests/unit/                   # Comprehensive unit test suite (78 tests)
 │   ├── test_alert_policy.py
 │   ├── test_audio.py
+│   ├── test_dashboard_api.py
 │   ├── test_device.py
 │   ├── test_distraction_detector.py
 │   ├── test_drowsiness_detector.py
@@ -240,6 +282,8 @@ CockpitSentinelAntigravity/
 │   ├── test_occlusion.py
 │   ├── test_paths.py
 │   ├── test_perclos.py
+│   ├── test_profiles.py
+│   ├── test_recognition.py
 │   ├── test_risk_scoring.py
 │   └── test_yawn_speech.py
 ├── pyproject.toml                # Build configuration & tool settings
@@ -250,7 +294,7 @@ CockpitSentinelAntigravity/
 
 ## Verification & Testing
 
-The test suite contains **65 unit tests** verifying all mathematical calculations, temporal buffers, edge-case classifications, and policy transitions:
+The test suite contains **78 unit tests** verifying all mathematical calculations, temporal buffers, edge-case classifications, biometric face signatures, and policy transitions:
 
 ```powershell
 # Run the test suite with coverage report

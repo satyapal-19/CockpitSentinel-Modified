@@ -106,6 +106,7 @@ class DrowsinessAnalysis:
     eye_occluded: bool = False
     talking: bool = False
     head_nodding: bool = False
+    landmarks: Sequence[Landmark] | None = None
 
 
 def load_drowsiness_config(path: Path) -> DrowsinessConfig:
@@ -435,6 +436,7 @@ class DrowsinessDetector:
             eye_occluded=is_occluded,
             talking=is_talking,
             head_nodding=is_nodding,
+            landmarks=landmarks,
         )
 
 

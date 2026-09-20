@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
@@ -20,8 +20,10 @@ from cockpit_sentinel.detection import (
 )
 from cockpit_sentinel.domain import DriverSignals, RiskAssessment, RiskLevel
 from cockpit_sentinel.drowsiness import (
+    DriverRecognizer,
     DrowsinessAnalysis,
     DrowsinessDetector,
+    ProfileManager,
     load_drowsiness_config,
 )
 from cockpit_sentinel.utils.device import resolve_device
@@ -74,14 +76,45 @@ class LiveMonitor:
         policy: AlertPolicy,
         distraction_detector: DistractionAnalyzer | None = None,
         audio_manager: AudioManager | None = None,
+        profile_manager: ProfileManager | None = None,
+        recognizer: DriverRecognizer | None = None,
     ) -> None:
         self._detector = detector
         self._policy = policy
         self._distraction_detector = distraction_detector
         self._audio_manager = audio_manager
+        self._profile_manager = profile_manager
+        self._recognizer = recognizer or DriverRecognizer()
+        self._recognized_driver_name: str | None = None
+        self._recognition_confidence: float = 0.0
+        self._frames_checked = 0
 
     def process(self, frame: np.ndarray) -> MonitorFrame:
         analysis = self._detector.analyze(frame)
+
+        # Auto-recognize driver from facial bone geometry
+        if (
+            self._profile_manager is not None
+            and self._recognized_driver_name is None
+            and analysis.landmarks is not None
+            and self._frames_checked < 60
+        ):
+            self._frames_checked += 1
+            h, w = frame.shape[:2]
+            profiles = self._profile_manager.get_all()
+            matched, conf = self._recognizer.match(analysis.landmarks, w, h, profiles)
+            if matched is not None:
+                self._recognized_driver_name = matched.name
+                self._recognition_confidence = conf
+                self._profile_manager.set_active_profile(matched.driver_id)
+                if hasattr(self._detector, "config"):
+                    curr_cfg = self._detector.config  # type: ignore[attr-defined]
+                    self._detector.config = replace(  # type: ignore[assignment,attr-defined]
+                        curr_cfg,
+                        eye_aspect_ratio_threshold=matched.ear_threshold,
+                        mouth_aspect_ratio_threshold=matched.mar_threshold,
+                    )
+
         distraction = None
         if self._distraction_detector is not None:
             distraction = self._distraction_detector.analyze(frame)
@@ -93,7 +126,13 @@ class LiveMonitor:
             first_reason = assessment.reasons[0] if assessment.reasons else None
             self._audio_manager.trigger(assessment.level, reason=first_reason)
 
-        image = draw_monitor_overlay(frame, analysis, assessment)
+        image = draw_monitor_overlay(
+            frame,
+            analysis,
+            assessment,
+            driver_name=self._recognized_driver_name,
+            confidence=self._recognition_confidence,
+        )
         return MonitorFrame(
             analysis=analysis,
             distraction=distraction,
@@ -120,7 +159,11 @@ def merge_signals(drowsiness: DriverSignals, distraction: DriverSignals) -> Driv
 
 
 def draw_monitor_overlay(
-    frame: np.ndarray, analysis: DrowsinessAnalysis, assessment: RiskAssessment
+    frame: np.ndarray,
+    analysis: DrowsinessAnalysis,
+    assessment: RiskAssessment,
+    driver_name: str | None = None,
+    confidence: float = 0.0,
 ) -> np.ndarray:
     """Draw readable status, active reasons, and measurements onto a frame copy."""
 
@@ -161,6 +204,23 @@ def draw_monitor_overlay(
         cv2.FONT_HERSHEY_SIMPLEX,
         0.55,
         (235, 235, 235),
+        1,
+        cv2.LINE_AA,
+    )
+
+    # Driver recognition badge
+    driver_text = (
+        f"Driver: {driver_name} ({confidence * 100:.0f}%)"
+        if driver_name
+        else "Driver: Default / Guest"
+    )
+    cv2.putText(
+        image,
+        driver_text,
+        (max(16, image.shape[1] - 290), 62),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.48,
+        (220, 235, 255),
         1,
         cv2.LINE_AA,
     )
@@ -261,6 +321,7 @@ def run_live_monitor(
     policy: AlertPolicy,
     distraction_detector: DistractionAnalyzer | None = None,
     audio_manager: AudioManager | None = None,
+    profile_manager: ProfileManager | None = None,
 ) -> None:
     """Open a webcam or video file and show processed frames until Q or Esc is pressed."""
 
@@ -268,7 +329,13 @@ def run_live_monitor(
     if not capture.isOpened():
         raise RuntimeError(f"Could not open video source: {source}")
 
-    monitor = LiveMonitor(detector, policy, distraction_detector, audio_manager=audio_manager)
+    monitor = LiveMonitor(
+        detector,
+        policy,
+        distraction_detector,
+        audio_manager=audio_manager,
+        profile_manager=profile_manager,
+    )
     try:
         while True:
             ok, frame = capture.read()
@@ -406,6 +473,12 @@ def main() -> None:
     print(f"CockpitSentinel starting on device: {target_device}")
     audio_status = "disabled (--no-audio)" if args.no_audio else "active (3-tier escalation)"
     print(f"Audio alert system: {audio_status}")
+    profile_manager = ProfileManager()
+    active_prof = profile_manager.get_active_profile()
+    print(
+        f"Driver Profile: active (current: '{active_prof.name}', "
+        f"EAR: {active_prof.ear_threshold}, MAR: {active_prof.mar_threshold})"
+    )
     print("Press Q or Esc in the video window to stop.")
 
     try:
@@ -425,6 +498,7 @@ def main() -> None:
                 alert_policy,
                 distraction_detector,
                 audio_manager=audio_mgr,
+                profile_manager=profile_manager,
             )
     except KeyboardInterrupt:
         print("\nMonitor interrupted by user. Exiting cleanly.")

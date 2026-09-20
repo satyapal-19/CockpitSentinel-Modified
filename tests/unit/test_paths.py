@@ -1,6 +1,5 @@
 """Unit tests for path and configuration resolution utilities."""
 
-
 from cockpit_sentinel.utils.paths import (
     find_project_root,
     resolve_config_path,

@@ -32,3 +32,19 @@ def test_combined_risk_is_critical_and_explained():
     assert assessment.score == 7
     assert assessment.level is RiskLevel.CRITICAL
     assert assessment.reasons == ("eyes closed", "phone detected")
+
+
+def test_perclos_fatigue_is_caution():
+    assessment = assess_risk(DriverSignals(perclos_fatigue=True))
+
+    assert assessment.score == 3
+    assert assessment.level is RiskLevel.CAUTION
+    assert assessment.reasons == ("high PERCLOS fatigue",)
+
+
+def test_microsleep_immediately_triggers_critical():
+    assessment = assess_risk(DriverSignals(microsleep_detected=True))
+
+    assert assessment.score == 6
+    assert assessment.level is RiskLevel.CRITICAL
+    assert assessment.reasons == ("microsleep detected",)

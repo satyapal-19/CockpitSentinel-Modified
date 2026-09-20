@@ -19,8 +19,9 @@ def test_resolve_device_explicit_cpu():
 
 
 def test_resolve_device_auto_fallback_to_cpu_when_no_gpu():
-    with patch("cockpit_sentinel.utils.device.is_cuda_available", return_value=False), patch(
-        "cockpit_sentinel.utils.device.is_mps_available", return_value=False
+    with (
+        patch("cockpit_sentinel.utils.device.is_cuda_available", return_value=False),
+        patch("cockpit_sentinel.utils.device.is_mps_available", return_value=False),
     ):
         assert resolve_device("auto") == "cpu"
         assert resolve_device(None) == "cpu"
@@ -32,8 +33,9 @@ def test_resolve_device_auto_picks_cuda_when_available():
 
 
 def test_resolve_device_auto_picks_mps_when_available():
-    with patch("cockpit_sentinel.utils.device.is_cuda_available", return_value=False), patch(
-        "cockpit_sentinel.utils.device.is_mps_available", return_value=True
+    with (
+        patch("cockpit_sentinel.utils.device.is_cuda_available", return_value=False),
+        patch("cockpit_sentinel.utils.device.is_mps_available", return_value=True),
     ):
         assert resolve_device("auto") == "mps"
 

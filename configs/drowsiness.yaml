@@ -2,3 +2,6 @@ eye_aspect_ratio_threshold: 0.22
 mouth_aspect_ratio_threshold: 0.60
 head_yaw_threshold_degrees: 30.0
 minimum_consecutive_frames: 3
+perclos_window_seconds: 30.0
+perclos_fatigue_threshold: 0.20
+microsleep_threshold_seconds: 1.5

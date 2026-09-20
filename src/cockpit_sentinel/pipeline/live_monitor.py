@@ -11,6 +11,7 @@ from typing import Protocol
 import cv2
 import numpy as np
 
+from cockpit_sentinel.alerts.audio import AudioManager
 from cockpit_sentinel.alerts.policy import AlertPolicy, load_alert_policy
 from cockpit_sentinel.detection import (
     DistractionAnalysis,
@@ -72,10 +73,12 @@ class LiveMonitor:
         detector: FrameAnalyzer,
         policy: AlertPolicy,
         distraction_detector: DistractionAnalyzer | None = None,
+        audio_manager: AudioManager | None = None,
     ) -> None:
         self._detector = detector
         self._policy = policy
         self._distraction_detector = distraction_detector
+        self._audio_manager = audio_manager
 
     def process(self, frame: np.ndarray) -> MonitorFrame:
         analysis = self._detector.analyze(frame)
@@ -85,6 +88,11 @@ class LiveMonitor:
         distraction_signals = distraction.signals if distraction else DriverSignals()
         signals = merge_signals(analysis.signals, distraction_signals)
         assessment = self._policy.assess(signals)
+
+        if self._audio_manager is not None:
+            first_reason = assessment.reasons[0] if assessment.reasons else None
+            self._audio_manager.trigger(assessment.level, reason=first_reason)
+
         image = draw_monitor_overlay(frame, analysis, assessment)
         return MonitorFrame(
             analysis=analysis,
@@ -103,6 +111,8 @@ def merge_signals(drowsiness: DriverSignals, distraction: DriverSignals) -> Driv
         looking_away=drowsiness.looking_away,
         phone_detected=distraction.phone_detected,
         smoking_detected=distraction.smoking_detected,
+        perclos_fatigue=drowsiness.perclos_fatigue,
+        microsleep_detected=drowsiness.microsleep_detected,
     )
 
 
@@ -137,10 +147,16 @@ def draw_monitor_overlay(
     )
 
     if analysis.face_detected:
+        perclos_str = (
+            f"PERCLOS: {analysis.perclos * 100:.1f}%"
+            if analysis.perclos is not None
+            else "PERCLOS: --"
+        )
         metrics = [
             f"EAR: {analysis.eye_aspect_ratio:.2f}",
             f"MAR: {analysis.mouth_aspect_ratio:.2f}",
             f"Yaw: {analysis.head_yaw_degrees:.1f} deg",
+            perclos_str,
         ]
         cv2.putText(
             image,
@@ -163,6 +179,22 @@ def draw_monitor_overlay(
             1,
             cv2.LINE_AA,
         )
+
+    # Highlight micro-sleep state with high-urgency flashing warning banner
+    if analysis.microsleep_detected:
+        h, w = image.shape[:2]
+        cv2.rectangle(image, (0, h - 45), (w, h), (0, 0, 220), thickness=-1)
+        cv2.putText(
+            image,
+            "!!! MICROSLEEP DETECTED - WAKE UP !!!",
+            (max(16, w // 2 - 230), h - 14),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.75,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+
     return image
 
 
@@ -171,6 +203,7 @@ def run_live_monitor(
     detector: FrameAnalyzer,
     policy: AlertPolicy,
     distraction_detector: DistractionAnalyzer | None = None,
+    audio_manager: AudioManager | None = None,
 ) -> None:
     """Open a webcam or video file and show processed frames until Q or Esc is pressed."""
 
@@ -178,7 +211,7 @@ def run_live_monitor(
     if not capture.isOpened():
         raise RuntimeError(f"Could not open video source: {source}")
 
-    monitor = LiveMonitor(detector, policy, distraction_detector)
+    monitor = LiveMonitor(detector, policy, distraction_detector, audio_manager=audio_manager)
     try:
         while True:
             ok, frame = capture.read()
@@ -214,6 +247,11 @@ def main() -> None:
         "--device",
         default=os.environ.get("COCKPIT_DEVICE", "auto"),
         help="Inference compute device: 'auto', 'cpu', 'cuda', 'cuda:0', 'mps' (default: auto).",
+    )
+    parser.add_argument(
+        "--no-audio",
+        action="store_true",
+        help="Disable 3-tier acoustic alert cues (default: audio enabled).",
     )
     parser.add_argument(
         "--models-root",
@@ -309,10 +347,13 @@ def main() -> None:
 
     target_device = resolve_device(args.device)
     print(f"CockpitSentinel starting on device: {target_device}")
+    audio_status = "disabled (--no-audio)" if args.no_audio else "active (3-tier escalation)"
+    print(f"Audio alert system: {audio_status}")
     print("Press Q or Esc in the video window to stop.")
 
     try:
         with (
+            AudioManager(enabled=not args.no_audio) as audio_mgr,
             DrowsinessDetector(model_path, drowsiness_config, delegate=target_device) as detector,
             DistractionDetector(
                 phone_model_path,
@@ -322,7 +363,11 @@ def main() -> None:
             ) as distraction_detector,
         ):
             run_live_monitor(
-                parse_source(args.source), detector, alert_policy, distraction_detector
+                parse_source(args.source),
+                detector,
+                alert_policy,
+                distraction_detector,
+                audio_manager=audio_mgr,
             )
     except KeyboardInterrupt:
         print("\nMonitor interrupted by user. Exiting cleanly.")

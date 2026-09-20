@@ -36,3 +36,14 @@ def test_stabilizer_requires_consecutive_active_frames():
 def test_invalid_config_is_rejected():
     with pytest.raises(ValueError, match="at least 1"):
         DrowsinessConfig(minimum_consecutive_frames=0)
+
+
+def test_invalid_perclos_config_is_rejected():
+    with pytest.raises(ValueError, match="perclos_window_seconds"):
+        DrowsinessConfig(perclos_window_seconds=0)
+
+    with pytest.raises(ValueError, match="perclos_fatigue_threshold"):
+        DrowsinessConfig(perclos_fatigue_threshold=0)
+
+    with pytest.raises(ValueError, match="microsleep_threshold_seconds"):
+        DrowsinessConfig(microsleep_threshold_seconds=-1)

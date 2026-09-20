@@ -25,6 +25,8 @@ def test_policy_rejects_non_increasing_thresholds(tmp_path):
   looking_away: 2
   phone_detected: 4
   smoking_detected: 3
+  perclos_fatigue: 3
+  microsleep_detected: 6
 thresholds:
   caution: 4
   warning: 4
@@ -34,4 +36,21 @@ thresholds:
     )
 
     with pytest.raises(PolicyConfigurationError, match="increase"):
+        load_alert_policy(invalid_policy)
+
+
+def test_policy_rejects_missing_signals(tmp_path):
+    invalid_policy = tmp_path / "alerts.yaml"
+    invalid_policy.write_text(
+        """weights:
+  eyes_closed: 3
+thresholds:
+  caution: 2
+  warning: 4
+  critical: 6
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PolicyConfigurationError, match="must define every driver signal"):
         load_alert_policy(invalid_policy)

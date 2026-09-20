@@ -4,6 +4,8 @@ weights:
   looking_away: 2
   phone_detected: 4
   smoking_detected: 3
+  perclos_fatigue: 3
+  microsleep_detected: 6
 
 thresholds:
   caution: 2

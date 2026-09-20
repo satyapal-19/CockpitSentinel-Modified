@@ -25,6 +25,8 @@ class DriverSignals:
     looking_away: bool = False
     phone_detected: bool = False
     smoking_detected: bool = False
+    perclos_fatigue: bool = False
+    microsleep_detected: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +44,8 @@ SIGNAL_WEIGHTS: dict[str, int] = {
     "looking_away": 2,
     "phone_detected": 4,
     "smoking_detected": 3,
+    "perclos_fatigue": 3,
+    "microsleep_detected": 6,
 }
 
 
@@ -51,6 +55,8 @@ SIGNAL_LABELS: dict[str, str] = {
     "looking_away": "looking away",
     "phone_detected": "phone detected",
     "smoking_detected": "smoking detected",
+    "perclos_fatigue": "high PERCLOS fatigue",
+    "microsleep_detected": "microsleep detected",
 }
 
 

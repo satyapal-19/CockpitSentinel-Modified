@@ -24,9 +24,7 @@ def is_mps_available() -> bool:
     try:
         import torch
 
-        return bool(
-            hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
-        )
+        return bool(hasattr(torch.backends, "mps") and torch.backends.mps.is_available())
     except ImportError:
         return False
 

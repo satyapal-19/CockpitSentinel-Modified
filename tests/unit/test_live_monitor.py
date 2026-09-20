@@ -1,7 +1,10 @@
 """Tests for the live monitoring frame composition layer."""
 
+from unittest.mock import patch
+
 import numpy as np
 
+from cockpit_sentinel.alerts.audio import AudioManager
 from cockpit_sentinel.alerts.policy import DEFAULT_POLICY
 from cockpit_sentinel.detection import DistractionAnalysis
 from cockpit_sentinel.domain import DriverSignals, RiskLevel
@@ -50,10 +53,22 @@ def test_parse_source_handles_webcams_and_video_paths():
 def test_live_monitor_merges_drowsiness_and_distraction_signals():
     frame = np.zeros((180, 320, 3), dtype=np.uint8)
 
-    processed = LiveMonitor(
-        StubDetector(), DEFAULT_POLICY, StubDistractionDetector()
-    ).process(frame)
+    processed = LiveMonitor(StubDetector(), DEFAULT_POLICY, StubDistractionDetector()).process(
+        frame
+    )
 
     assert processed.distraction is not None
     assert processed.assessment.level is RiskLevel.CRITICAL
     assert "phone detected" in processed.assessment.reasons
+
+
+def test_live_monitor_triggers_audio_manager():
+    frame = np.zeros((180, 320, 3), dtype=np.uint8)
+    with (
+        AudioManager(enabled=False) as audio,
+        patch.object(audio, "trigger") as mock_trigger,
+    ):
+        monitor = LiveMonitor(StubDetector(), DEFAULT_POLICY, audio_manager=audio)
+        processed = monitor.process(frame)
+        assert mock_trigger.called
+        assert processed.assessment.level is RiskLevel.CAUTION

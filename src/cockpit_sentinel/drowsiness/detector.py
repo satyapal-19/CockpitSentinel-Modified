@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import time
+from collections import deque
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import dist
 from pathlib import Path
 from typing import Any, Protocol
@@ -49,6 +51,9 @@ class DrowsinessConfig:
     mouth_aspect_ratio_threshold: float = 0.60
     head_yaw_threshold_degrees: float = 30.0
     minimum_consecutive_frames: int = 3
+    perclos_window_seconds: float = 30.0
+    perclos_fatigue_threshold: float = 0.20
+    microsleep_threshold_seconds: float = 1.5
 
     def __post_init__(self) -> None:
         if not 0 < self.eye_aspect_ratio_threshold < 1:
@@ -59,6 +64,12 @@ class DrowsinessConfig:
             raise ValueError("head_yaw_threshold_degrees must be between 0 and 90.")
         if self.minimum_consecutive_frames < 1:
             raise ValueError("minimum_consecutive_frames must be at least 1.")
+        if self.perclos_window_seconds <= 0:
+            raise ValueError("perclos_window_seconds must be positive.")
+        if not 0 < self.perclos_fatigue_threshold <= 1:
+            raise ValueError("perclos_fatigue_threshold must be between 0 and 1.")
+        if self.microsleep_threshold_seconds <= 0:
+            raise ValueError("microsleep_threshold_seconds must be positive.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +81,9 @@ class DrowsinessAnalysis:
     eye_aspect_ratio: float | None = None
     mouth_aspect_ratio: float | None = None
     head_yaw_degrees: float | None = None
+    perclos: float | None = None
+    closure_duration_seconds: float = 0.0
+    microsleep_detected: bool = False
 
 
 def load_drowsiness_config(path: Path) -> DrowsinessConfig:
@@ -129,6 +143,63 @@ class SignalStabilizer:
             self._counts[name] = 0
 
 
+class PERCLOSTracker:
+    """Calculate percentage of eye closure (PERCLOS) and detect micro-sleep events."""
+
+    def __init__(
+        self,
+        window_seconds: float = 30.0,
+        fatigue_threshold: float = 0.20,
+        microsleep_seconds: float = 1.5,
+    ) -> None:
+        if window_seconds <= 0:
+            raise ValueError("window_seconds must be positive.")
+        if not 0 < fatigue_threshold <= 1:
+            raise ValueError("fatigue_threshold must be between 0 and 1.")
+        if microsleep_seconds <= 0:
+            raise ValueError("microsleep_seconds must be positive.")
+
+        self.window_seconds = window_seconds
+        self.fatigue_threshold = fatigue_threshold
+        self.microsleep_seconds = microsleep_seconds
+
+        self._history: deque[tuple[float, bool]] = deque()
+        self._closure_start_time: float | None = None
+
+    def update(
+        self, eyes_closed: bool, timestamp: float | None = None
+    ) -> tuple[float, float, bool, bool]:
+        """Record eye state and return (perclos, closure_duration, is_fatigued, is_microsleep)."""
+        now = time.monotonic() if timestamp is None else timestamp
+
+        if eyes_closed:
+            if self._closure_start_time is None:
+                self._closure_start_time = now
+            closure_duration = now - self._closure_start_time
+        else:
+            self._closure_start_time = None
+            closure_duration = 0.0
+
+        is_microsleep = closure_duration >= self.microsleep_seconds
+
+        self._history.append((now, eyes_closed))
+
+        cutoff = now - self.window_seconds
+        while self._history and self._history[0][0] < cutoff:
+            self._history.popleft()
+
+        closed_count = sum(1 for _, closed in self._history if closed)
+        perclos = (closed_count / len(self._history)) if self._history else 0.0
+        is_fatigued = perclos >= self.fatigue_threshold
+
+        return perclos, closure_duration, is_fatigued, is_microsleep
+
+    def reset(self) -> None:
+        """Clear temporal window and closure timing state."""
+        self._history.clear()
+        self._closure_start_time = None
+
+
 class DrowsinessDetector:
     """Extract eye, mouth, and head-direction signals from BGR OpenCV frames."""
 
@@ -145,6 +216,11 @@ class DrowsinessDetector:
         self.delegate_name = delegate or "cpu"
         self._landmarker = self._create_landmarker(model_path, self.delegate_name)
         self._stabilizer = SignalStabilizer(self.config.minimum_consecutive_frames)
+        self._perclos_tracker = PERCLOSTracker(
+            window_seconds=self.config.perclos_window_seconds,
+            fatigue_threshold=self.config.perclos_fatigue_threshold,
+            microsleep_seconds=self.config.microsleep_threshold_seconds,
+        )
 
     @staticmethod
     def _create_landmarker(model_path: Path, delegate: str) -> vision.FaceLandmarker:
@@ -182,7 +258,7 @@ class DrowsinessDetector:
     def __exit__(self, *_: object) -> None:
         self.close()
 
-    def analyze(self, frame: np.ndarray) -> DrowsinessAnalysis:
+    def analyze(self, frame: np.ndarray, timestamp: float | None = None) -> DrowsinessAnalysis:
         """Analyze one BGR frame and return stabilized fatigue/attention signals."""
 
         if frame.ndim != 3 or frame.shape[2] != 3:
@@ -193,6 +269,7 @@ class DrowsinessDetector:
         result = self._landmarker.detect(image)
         if not result.face_landmarks:
             self._stabilizer.reset()
+            self._perclos_tracker.reset()
             return DrowsinessAnalysis(signals=DriverSignals(), face_detected=False)
 
         landmarks = result.face_landmarks[0]
@@ -203,17 +280,32 @@ class DrowsinessDetector:
         mar = mouth_aspect_ratio(_pixel_points(landmarks, MOUTH, width, height))
         yaw = _estimate_head_yaw(landmarks, width, height)
 
+        raw_eyes_closed = ear < self.config.eye_aspect_ratio_threshold
+        perclos, closure_duration, is_fatigued, is_microsleep = self._perclos_tracker.update(
+            raw_eyes_closed, timestamp=timestamp
+        )
+
         raw_signals = DriverSignals(
-            eyes_closed=ear < self.config.eye_aspect_ratio_threshold,
+            eyes_closed=raw_eyes_closed,
             yawning=mar > self.config.mouth_aspect_ratio_threshold,
             looking_away=abs(yaw) > self.config.head_yaw_threshold_degrees,
+            perclos_fatigue=is_fatigued,
+            microsleep_detected=is_microsleep,
         )
+
+        stabilized = self._stabilizer.update(raw_signals)
+        if is_microsleep:
+            stabilized = replace(stabilized, microsleep_detected=True)
+
         return DrowsinessAnalysis(
-            signals=self._stabilizer.update(raw_signals),
+            signals=stabilized,
             face_detected=True,
             eye_aspect_ratio=ear,
             mouth_aspect_ratio=mar,
             head_yaw_degrees=yaw,
+            perclos=perclos,
+            closure_duration_seconds=closure_duration,
+            microsleep_detected=is_microsleep,
         )
 
 

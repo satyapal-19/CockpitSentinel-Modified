@@ -111,9 +111,7 @@ class DistractionDetector:
             predict_kwargs["device"] = self.device
 
         phone_confidence = _highest_confidence(
-            self._phone_model(
-                frame, conf=self.config.phone_confidence_threshold, **predict_kwargs
-            ),
+            self._phone_model(frame, conf=self.config.phone_confidence_threshold, **predict_kwargs),
             {"cell phone"},
         )
         smoking_confidence = _highest_confidence(

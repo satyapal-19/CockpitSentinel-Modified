@@ -34,9 +34,9 @@
       </div>
 
       <div class="flex items-center gap-3">
-        <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium">
-          <span class="h-2 w-2 rounded-full bg-emerald-500 live-dot"></span>
-          Camera Stream Live
+        <div id="cameraStatusPill" class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-medium">
+          <span id="cameraDot" class="h-2 w-2 rounded-full bg-amber-500 live-dot"></span>
+          <span id="cameraStatusText">Camera Initializing...</span>
         </div>
         <div id="connectionStatus" class="px-3 py-1.5 rounded-lg bg-zinc-800 border border-zinc-700 text-xs text-zinc-300 font-mono">
           Connected
@@ -371,6 +371,13 @@
         try {
           const data = JSON.parse(event.data);
           if (data.ear !== undefined) {
+            // Update Camera Status Pill & FPS
+            if (data.camera_active) {
+              document.getElementById("cameraStatusPill").className = "flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium";
+              document.getElementById("cameraDot").className = "h-2 w-2 rounded-full bg-emerald-500 live-dot";
+              document.getElementById("cameraStatusText").innerHTML = `Camera Active (<span class="font-mono font-bold">${data.fps ? data.fps.toFixed(1) : "30.0"}</span> FPS)`;
+            }
+
             document.getElementById("telEar").innerText = data.eye_occluded ? "occluded" : data.ear.toFixed(2);
             document.getElementById("telMar").innerText = data.mar !== null ? data.mar.toFixed(2) : "--";
             document.getElementById("telPose").innerText = `${data.pitch.toFixed(1)}° / ${data.yaw.toFixed(1)}°`;

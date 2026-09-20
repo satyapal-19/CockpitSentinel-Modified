@@ -20,6 +20,7 @@ from cockpit_sentinel.detection import (
 )
 from cockpit_sentinel.domain import DriverSignals, RiskAssessment, RiskLevel
 from cockpit_sentinel.drowsiness import (
+    DriverProfile,
     DriverRecognizer,
     DrowsinessAnalysis,
     DrowsinessDetector,
@@ -88,6 +89,17 @@ class LiveMonitor:
         self._recognized_driver_name: str | None = None
         self._recognition_confidence: float = 0.0
         self._frames_checked = 0
+
+    def apply_profile(self, profile: DriverProfile) -> None:
+        """Apply a driver profile directly to the active detector."""
+        self._recognized_driver_name = profile.name
+        if hasattr(self._detector, "config"):
+            curr_cfg = self._detector.config  # type: ignore[attr-defined]
+            self._detector.config = replace(  # type: ignore[assignment,attr-defined]
+                curr_cfg,
+                eye_aspect_ratio_threshold=profile.ear_threshold,
+                mouth_aspect_ratio_threshold=profile.mar_threshold,
+            )
 
     def process(self, frame: np.ndarray) -> MonitorFrame:
         analysis = self._detector.analyze(frame)

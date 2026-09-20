@@ -74,3 +74,20 @@ def test_dashboard_api_telemetry_snapshot(client):
     assert "ear" in data
     assert "mar" in data
     assert "level" in data
+    assert "fps" in data
+    assert "camera_active" in data
+
+
+def test_telemetry_state_update_and_sampling():
+    tel = TelemetryState()
+    assert tel.ear == 0.31
+
+    tel.ear_samples.append(0.28)
+    tel.mar_samples.append(0.19)
+    ears, mars = tel.get_recent_samples(count=10)
+    assert len(ears) == 10
+    assert len(mars) == 10
+
+    d = tel.to_dict()
+    assert "fps" in d
+    assert "camera_active" in d

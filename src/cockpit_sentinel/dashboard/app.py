@@ -6,16 +6,25 @@ import argparse
 import asyncio
 import contextlib
 import logging
+import threading
+import time
+from collections import deque
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import cv2
+import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from cockpit_sentinel.dashboard.worker import MonitoringWorker
 from cockpit_sentinel.drowsiness import ProfileManager
+
+if TYPE_CHECKING:
+    from cockpit_sentinel.pipeline.live_monitor import LiveMonitor, MonitorFrame
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +47,12 @@ class TelemetryState:
     """Thread-safe snapshot of live vehicle monitoring telemetry."""
 
     def __init__(self) -> None:
+        self._lock = threading.Lock()
         self.ear: float = 0.31
         self.mar: float = 0.19
-        self.pitch: float = 2.4
-        self.yaw: float = -1.2
-        self.perclos: float = 0.042
+        self.pitch: float = 0.0
+        self.yaw: float = 0.0
+        self.perclos: float = 0.0
         self.level: str = "safe"
         self.score: int = 0
         self.eye_occluded: bool = False
@@ -50,40 +60,119 @@ class TelemetryState:
         self.head_nodding: bool = False
         self.microsleep: bool = False
         self.recognized_driver: str = "Default Driver"
-        self.recognition_confidence: float = 0.96
+        self.recognition_confidence: float = 0.95
+        self.fps: float = 0.0
+        self.camera_active: bool = False
         self.latest_jpeg: bytes | None = None
+        self.ear_samples: deque[float] = deque(maxlen=180)
+        self.mar_samples: deque[float] = deque(maxlen=180)
+
+    def update_from_monitor(
+        self,
+        processed: MonitorFrame,
+        monitor: LiveMonitor,
+        fps: float = 0.0,
+    ) -> None:
+        with self._lock:
+            analysis = processed.analysis
+            assessment = processed.assessment
+            if analysis.eye_aspect_ratio is not None:
+                self.ear = round(float(analysis.eye_aspect_ratio), 3)
+                self.ear_samples.append(self.ear)
+            if analysis.mouth_aspect_ratio is not None:
+                self.mar = round(float(analysis.mouth_aspect_ratio), 3)
+                self.mar_samples.append(self.mar)
+            if analysis.head_pitch_degrees is not None:
+                self.pitch = round(float(analysis.head_pitch_degrees), 1)
+            if analysis.head_yaw_degrees is not None:
+                self.yaw = round(float(analysis.head_yaw_degrees), 1)
+            if analysis.perclos is not None:
+                self.perclos = round(float(analysis.perclos), 4)
+
+            self.level = str(assessment.level.value)
+            self.score = int(assessment.score)
+            self.eye_occluded = bool(analysis.eye_occluded)
+            self.talking = bool(analysis.talking)
+            self.head_nodding = bool(analysis.head_nodding)
+            self.microsleep = bool(analysis.microsleep_detected)
+            if monitor._recognized_driver_name:
+                self.recognized_driver = monitor._recognized_driver_name
+                self.recognition_confidence = round(float(monitor._recognition_confidence), 2)
+            self.fps = round(float(fps), 1)
+            self.camera_active = True
+
+    def get_recent_samples(self, count: int = 90) -> tuple[list[float], list[float]]:
+        with self._lock:
+            ears = list(self.ear_samples)
+            mars = list(self.mar_samples)
+        if len(ears) < 10:
+            ears = [self.ear] * count
+            mars = [self.mar] * count
+        elif len(ears) < count:
+            ears = (ears * (count // len(ears) + 1))[:count]
+            mars = (mars * (count // len(mars) + 1))[:count]
+        else:
+            ears = ears[-count:]
+            mars = mars[-count:]
+        return ears, mars
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "ear": self.ear,
-            "mar": self.mar,
-            "pitch": self.pitch,
-            "yaw": self.yaw,
-            "perclos": self.perclos,
-            "level": self.level,
-            "score": self.score,
-            "eye_occluded": self.eye_occluded,
-            "talking": self.talking,
-            "head_nodding": self.head_nodding,
-            "microsleep": self.microsleep,
-            "recognized_driver": self.recognized_driver,
-            "recognition_confidence": self.recognition_confidence,
-        }
+        with self._lock:
+            return {
+                "ear": self.ear,
+                "mar": self.mar,
+                "pitch": self.pitch,
+                "yaw": self.yaw,
+                "perclos": self.perclos,
+                "level": self.level,
+                "score": self.score,
+                "eye_occluded": self.eye_occluded,
+                "talking": self.talking,
+                "head_nodding": self.head_nodding,
+                "microsleep": self.microsleep,
+                "recognized_driver": self.recognized_driver,
+                "recognition_confidence": self.recognition_confidence,
+                "fps": self.fps,
+                "camera_active": self.camera_active,
+            }
 
 
 def create_app(
     profile_manager: ProfileManager | None = None,
     telemetry: TelemetryState | None = None,
+    worker: MonitoringWorker | None = None,
+    start_camera: bool = False,
+    source: int | str = 0,
+    device: str = "auto",
+    no_audio: bool = False,
 ) -> FastAPI:
     """Create configured FastAPI application for driver telematics."""
-    app = FastAPI(title="CockpitSentinel Telematics Dashboard")
     pm = profile_manager or ProfileManager()
     tel = telemetry or TelemetryState()
 
+    active_worker = worker
+    if active_worker is None and start_camera:
+        active_worker = MonitoringWorker(
+            source=source,
+            device=device,
+            telemetry=tel,
+            profile_manager=pm,
+            enable_audio=not no_audio,
+        )
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        if active_worker is not None and start_camera:
+            active_worker.start()
+        yield
+        if active_worker is not None and active_worker.is_running:
+            active_worker.stop()
+
+    app = FastAPI(title="CockpitSentinel Telematics Dashboard", lifespan=lifespan)
     active_websockets: list[WebSocket] = []
     template_path = Path(__file__).resolve().parent / "templates" / "index.html"
 
-    @app.get("/", response_class=HTMLResponse)
+    @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
     async def index() -> HTMLResponse:
         if not template_path.exists():
             return HTMLResponse(
@@ -128,6 +217,8 @@ def create_app(
         if not success:
             raise HTTPException(status_code=404, detail="Profile not found")
         p = pm.get(driver_id)
+        if p and active_worker is not None and driver_id == pm.get_active_profile().driver_id:
+            active_worker.sync_active_profile(p)
         return p.to_dict() if p else {}
 
     @app.post("/api/profiles/{driver_id}/activate", response_model=dict[str, Any])
@@ -136,22 +227,22 @@ def create_app(
             raise HTTPException(status_code=404, detail="Profile not found")
         p = pm.get_active_profile()
         tel.recognized_driver = p.name
+        if active_worker is not None:
+            active_worker.sync_active_profile(p)
         return p.to_dict()
 
     @app.post("/api/profiles/{driver_id}/calibrate", response_model=dict[str, Any])
     async def calibrate_profile(driver_id: str) -> dict[str, Any]:
-        # Simulate / trigger 90-frame calibration calculation
         p = pm.get(driver_id)
         if not p:
             raise HTTPException(status_code=404, detail="Profile not found")
 
-        # Use current telemetry or baseline samples
-        sample_ear = [tel.ear * (0.95 + 0.1 * (i % 5) / 5) for i in range(90)]
-        sample_mar = [tel.mar * (0.95 + 0.1 * (i % 5) / 5) for i in range(90)]
-
+        sample_ear, sample_mar = tel.get_recent_samples(count=90)
         calibrated = pm.auto_calibrate(driver_id, sample_ear, sample_mar)
         if not calibrated:
             raise HTTPException(status_code=400, detail="Calibration failed")
+        if active_worker is not None:
+            active_worker.sync_active_profile(calibrated)
         return calibrated.to_dict()
 
     @app.get("/api/telemetry")
@@ -165,35 +256,32 @@ def create_app(
                 if tel.latest_jpeg is not None:
                     frame_bytes = tel.latest_jpeg
                 else:
-                    # Synthetic placeholder frame if camera is not active
-                    import numpy as np
-
                     img = np.zeros((360, 640, 3), dtype=np.uint8)
                     cv2.putText(
                         img,
-                        "CockpitSentinel Video Stream",
-                        (140, 160),
+                        "Connecting to CockpitSentinel Camera...",
+                        (100, 160),
                         cv2.FONT_HERSHEY_SIMPLEX,
-                        0.75,
+                        0.65,
                         (200, 200, 200),
                         2,
+                        cv2.LINE_AA,
                     )
                     cv2.putText(
                         img,
-                        f"Active Driver: {tel.recognized_driver}",
-                        (170, 200),
+                        f"Active Profile: {tel.recognized_driver}",
+                        (140, 200),
                         cv2.FONT_HERSHEY_SIMPLEX,
-                        0.60,
+                        0.55,
                         (100, 200, 255),
                         1,
+                        cv2.LINE_AA,
                     )
                     _, encoded = cv2.imencode(".jpg", img)
                     frame_bytes = encoded.tobytes()
 
                 yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n")
-                import time
-
-                time.sleep(0.04)
+                time.sleep(0.033)
 
         return StreamingResponse(
             frame_generator(),
@@ -207,7 +295,7 @@ def create_app(
         try:
             while True:
                 await websocket.send_json(tel.to_dict())
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.04)
         except (WebSocketDisconnect, asyncio.CancelledError):
             pass
         finally:
@@ -226,12 +314,24 @@ def main() -> None:
         "--source", default="0", help="Webcam index or video file path (default: 0)"
     )
     parser.add_argument("--device", default="auto", help="Inference device: 'auto', 'cpu', 'cuda'")
+    parser.add_argument(
+        "--no-audio", action="store_true", help="Disable acoustic alerts (default: audio enabled)"
+    )
+    parser.add_argument(
+        "--no-camera", action="store_true", help="Run dashboard without opening camera"
+    )
     args = parser.parse_args()
 
-    app = create_app()
+    app = create_app(
+        start_camera=not args.no_camera,
+        source=args.source,
+        device=args.device,
+        no_audio=args.no_audio,
+    )
     print("\n=======================================================")
     print("🚀 CockpitSentinel Telematics Dashboard Running at:")
     print(f"   http://{args.host}:{args.port}")
+    print(f"   Camera Source: {args.source} | Device: {args.device}")
     print("=======================================================\n")
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 

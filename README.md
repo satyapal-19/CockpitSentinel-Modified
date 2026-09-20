@@ -7,14 +7,26 @@
 </p>
 
 <p align="center">
+  <img src="https://img.shields.io/badge/Python-3.11%20%7C%203.12-blue?logo=python" alt="Python 3.11+">
+  <img src="https://img.shields.io/badge/Tests-78%20Passing-brightgreen?logo=pytest" alt="78 Tests Passing">
+  <img src="https://img.shields.io/badge/Coverage-72%25-green" alt="72% Test Coverage">
+  <img src="https://img.shields.io/badge/Code%20Style-Ruff-black" alt="Ruff Formatted">
+  <img src="https://img.shields.io/badge/Compute-CUDA%20%7C%20MPS%20%7C%20CPU-orange" alt="Hardware Agnostic">
+  <img src="https://img.shields.io/badge/Framework-FastAPI%20%2B%20OpenCV-teal" alt="FastAPI + OpenCV">
+</p>
+
+<p align="center">
   <a href="#key-features">Key Features</a> •
   <a href="#algorithmic-innovations">Algorithmic Innovations</a> •
-  <a href="#audio-escalation">Audio Escalation</a> •
+  <a href="#auto-driver-recognition--multi-driver-profiles">Driver Recognition</a> •
+  <a href="#telematics-web-dashboard">Web Dashboard</a> •
+  <a href="#3-tier-contextual-audio-escalation-subsystem">Audio Escalation</a> •
+  <a href="#api-reference">API Reference</a> •
   <a href="#architecture">Architecture</a> •
   <a href="#quick-start">Quick Start</a> •
-  <a href="#usage">Usage</a> •
+  <a href="#usage--cli-options">Usage</a> •
   <a href="#configuration">Configuration</a> •
-  <a href="#project-structure">Project Structure</a> •
+  <a href="#project-structure">Structure</a> •
   <a href="#team">Team</a>
 </p>
 
@@ -87,6 +99,39 @@
 
 ---
 
+## Telematics Web Dashboard
+
+CockpitSentinel includes a full-stack, responsive web dashboard built with **FastAPI**, **HTML5**, **Tailwind CSS**, and **WebSockets**.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  🚗 CockpitSentinel Telematics HUD            [ACTIVE DRIVER: Satyapal 97%]  │
+├──────────────────────────────────────┬──────────────────────────────────────┤
+│                                      │  🎛️ DRIVER PROFILES                  │
+│       LIVE MJPEG VIDEO STREAM        │  Active: [ Satyapal Gaikwad     ▼ ]  │
+│        (Sub-10ms latency)            │  [+ New Driver]  [⏱️ Auto-Calibrate] │
+│                                      ├──────────────────────────────────────┤
+│   - Bounding Boxes & Facial Mesh     │  🎚️ BOUNDARY ADJUSTMENTS (Live)      │
+│   - Real-time HUD Badges             │  EAR Threshold: [──●────] 0.22       │
+│   - Dynamic Hazard Banners           │  MAR Threshold: [────●──] 0.60       │
+│                                      │  Pitch Limit:   [──●────] 15.0°      │
+├──────────────────────────────────────┴──────────────────────────────────────┤
+│  📊 REAL-TIME TELEMETRY GAUGES                                              │
+│  [ EAR: 0.31 ]    [ MAR: 0.18 ]    [ PERCLOS: 4.2% ]    [ Pitch: -2.1° ]    │
+│  [ Yaw: 3.5° ]    [ Risk: 0 SAFE ] [ FPS: 30.0 ]        [ Safety: 98/100 ]  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Dashboard Capabilities:
+- **Live Video Streaming**: Real-time MJPEG feed streamed at 30 FPS directly to the browser.
+- **25 Hz WebSocket Telemetry**: Instantaneous pushing of facial angles, closure ratios, fatigue metrics, and active alert state.
+- **Driver Profile Hub**: Create, switch, or inspect drivers on-the-fly without restarting the video feed.
+- **Dynamic Boundary Sliders**: Adjust EAR, MAR, and Pitch limits with instantaneous REST synchronization to disk.
+- **1-Click 3-Second Auto-Calibration**: Captures live resting geometry and recalibrates driver baseline on demand.
+- **Trip Safety Score**: Dynamic 100-point safety index penalized by microsleep, distraction, nodding, and yawning events.
+
+---
+
 ## 3-Tier Contextual Audio Escalation Subsystem
 
 Audio alerts are generated asynchronously on a dedicated daemon worker thread consuming from a bounded queue, ensuring **zero frame drops** and steady FPS in video processing.
@@ -101,6 +146,25 @@ Audio alerts are generated asynchronously on a dedicated daemon worker thread co
 
 ---
 
+## API Reference
+
+The dashboard provides a complete RESTful and WebSocket API:
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/` | Responsive HTML5 telematics dashboard web interface |
+| `GET` | `/api/profiles` | List all registered driver profiles |
+| `POST` | `/api/profiles` | Create a new driver profile (`name`, resting & threshold EAR/MAR) |
+| `GET` | `/api/profiles/{id}` | Retrieve details for a specific driver profile |
+| `PUT` | `/api/profiles/{id}` | Update thresholds (EAR, MAR, Pitch) for a profile |
+| `POST` | `/api/profiles/{id}/calibrate` | Run 3-second auto-calibration on the driver profile |
+| `POST` | `/api/profiles/{id}/activate` | Set active driver profile for the live pipeline |
+| `GET` | `/api/telemetry` | Get latest instantaneous telemetry snapshot (JSON) |
+| `GET` | `/api/video_feed` | Multipart MJPEG real-time video stream |
+| `WS` | `/ws/telemetry` | Bi-directional WebSocket streaming telemetry at 25 Hz |
+
+---
+
 ## Architecture
 
 ```
@@ -108,40 +172,39 @@ Audio alerts are generated asynchronously on a dedicated daemon worker thread co
                              │   Camera / Video Frame   │
                              └─────────────┬────────────┘
                                            │
-                        ┌──────────────────┴──────────────────┐
-                        ▼                                     ▼
-              DrowsinessDetector                     DistractionDetector
-          (MediaPipe Face Landmarker)                (YOLOv8 + YOLOWorld)
-                        │                                     │
-         ┌──────────────┼──────────────┐                      │
-         ▼              ▼              ▼                      │
-    Eye Contrast    Yawn/Speech     3D Pose                   │
-    (Occlusion)     (Derivative)  (Pitch/Yaw)                 │
-         │              │              │                      │
-         │              ▼              ▼                      │
-         │       [yawn vs talk]  [head nod]                   │
-         ▼              │              │                      │
-   PERCLOS (P80)        │              │                      │
-         │              └───────┬──────┘                      │
-         └──────────────┐       │                             │
-                        ▼       ▼                             ▼
-                      DriverSignals ◄─────────────────────────┘
-                   (eyes_closed, yawning, talking,
-                    looking_away, phone, smoking,
-                    perclos_fatigue, microsleep,
-                    head_nodding, eye_occluded)
-                                │
-                                ▼
-                           AlertPolicy
-             (Risk fusion & occlusion fallback mode)
-                                │
-              ┌─────────────────┴─────────────────┐
-              ▼                                   ▼
-      OpenCV Live Overlay                    AudioManager
-    - Status & Risk Level               - Tier 1 Caution Chime
-    - [SUNGLASSES MODE] Badge           - Tier 2 Warning Tone
-    - Telemetry (EAR, MAR, Pitch, Yaw)  - Tier 3 Critical Siren
-    - Emergency Flashing Banners        - Zero-lag Daemon Thread
+                         ┌─────────────────┴─────────────────┐
+                         ▼                                   ▼
+               DrowsinessDetector                   DistractionDetector
+           (MediaPipe Face Landmarker)              (YOLOv8 + YOLOWorld)
+                         │                                   │
+          ┌──────────────┼──────────────┐                    │
+          ▼              ▼              ▼                    │
+     Eye Contrast   Yawn/Speech      3D Pose                 │
+     (Occlusion)    (Derivative)   (Pitch/Yaw)               │
+          │              │              │                    │
+          │              ▼              ▼                    │
+          │       [yawn vs talk]   [head nod]                │
+          ▼              │              │                    │
+    PERCLOS (P80)        │              │                    │
+          │              └───────┬──────┘                    │
+          └──────────────┐       │                           │
+                         ▼       ▼                           ▼
+                       DriverSignals ◄───────────────────────┘
+                    (eyes_closed, yawning, talking,
+                     looking_away, phone, smoking,
+                     perclos_fatigue, microsleep,
+                     head_nodding, eye_occluded)
+                                 │
+                                 ▼
+                            AlertPolicy
+              (Risk fusion & occlusion fallback mode)
+                                 │
+           ┌─────────────────────┼─────────────────────┐
+           ▼                     ▼                     ▼
+    Live OpenCV HUD      AudioManager (Daemon)   Web Dashboard (FastAPI)
+  - Biometric Badge    - Tier 1: Soft Chime    - Live MJPEG Video Feed
+  - 3D Euler Vectors   - Tier 2: Double Tone   - Real-Time WebSockets
+  - Warning Banners    - Tier 3: Alarm Siren   - Profile Calibration
 ```
 
 ---
@@ -246,6 +309,8 @@ CockpitSentinelAntigravity/
 │   ├── distraction.yaml          #   YOLO detection confidences
 │   ├── drowsiness.yaml           #   EAR, MAR, PERCLOS, speech & pitch limits
 │   └── models.yaml               #   Model asset registry
+├── data/                         # Persistent runtime storage
+│   └── profiles.json             #   Driver profiles & biometric signatures
 ├── scripts/                      # Bootstrap and validation utilities
 │   ├── run_dashboard.py          #   Telematics Web Dashboard launcher
 │   ├── run_drowsiness_monitor.py #   Convenience launcher script
@@ -260,6 +325,7 @@ CockpitSentinelAntigravity/
 │   │   ├── templates/index.html  #     Real-time HTML5/Tailwind dashboard UI
 │   │   └── app.py                #     REST & WebSocket telemetry server
 │   ├── detection/                #   Object detection (YOLOv8 + YOLOWorld)
+│   │   └── distraction.py        #     Phone use and smoking inference
 │   ├── drowsiness/               #   MediaPipe geometry & fatigue trackers
 │   │   ├── detector.py           #     FaceLandmarker, EAR, MAR & Head pose
 │   │   ├── occlusion.py          #     Sunglasses & eye contrast detector
@@ -268,24 +334,26 @@ CockpitSentinelAntigravity/
 │   ├── pipeline/                 #   Live video capture and HUD rendering
 │   │   └── live_monitor.py       #     LiveMonitor frame loop & overlay
 │   ├── utils/                    #   Cross-device, GPU resolution & paths
+│   │   ├── device.py             #     CUDA, MPS, and CPU resolution
+│   │   └── paths.py              #     Cross-platform path resolution
 │   └── domain.py                 #   Shared dataclasses, signals & contracts
 ├── tests/unit/                   # Comprehensive unit test suite (78 tests)
-│   ├── test_alert_policy.py
-│   ├── test_audio.py
-│   ├── test_dashboard_api.py
-│   ├── test_device.py
-│   ├── test_distraction_detector.py
-│   ├── test_drowsiness_detector.py
-│   ├── test_environment.py
-│   ├── test_head_pose.py
-│   ├── test_live_monitor.py
-│   ├── test_occlusion.py
-│   ├── test_paths.py
-│   ├── test_perclos.py
-│   ├── test_profiles.py
-│   ├── test_recognition.py
-│   ├── test_risk_scoring.py
-│   └── test_yawn_speech.py
+│   ├── test_alert_policy.py      #   Alert policy scoring & weights
+│   ├── test_audio.py             #   Audio manager queue & cooldowns
+│   ├── test_dashboard_api.py     #   FastAPI REST endpoints & telemetry
+│   ├── test_device.py            #   Hardware device detection & fallback
+│   ├── test_distraction_detector.py # YOLO distraction detection
+│   ├── test_drowsiness_detector.py # MediaPipe geometry & thresholds
+│   ├── test_environment.py       #   Package import & version check
+│   ├── test_head_pose.py         #   3D Euler angles & head droop
+│   ├── test_live_monitor.py      #   Pipeline fusion & overlay loop
+│   ├── test_occlusion.py         #   Sunglasses contrast & fallback mode
+│   ├── test_paths.py             #   Path resolution & project markers
+│   ├── test_perclos.py           #   P80 PERCLOS & micro-sleep detection
+│   ├── test_profiles.py          #   Profile CRUD & auto-calibration
+│   ├── test_recognition.py       #   Scale invariance & face recognition
+│   ├── test_risk_scoring.py      #   Signal risk synthesis
+│   └── test_yawn_speech.py       #   Oscillation-based speech filtering
 ├── pyproject.toml                # Build configuration & tool settings
 └── README.md
 ```

@@ -48,3 +48,27 @@ def test_microsleep_immediately_triggers_critical():
     assert assessment.score == 6
     assert assessment.level is RiskLevel.CRITICAL
     assert assessment.reasons == ("microsleep detected",)
+
+
+def test_talking_is_safe_with_zero_weight():
+    assessment = assess_risk(DriverSignals(talking=True))
+
+    assert assessment.score == 0
+    assert assessment.level is RiskLevel.SAFE
+    assert assessment.reasons == ()
+
+
+def test_head_nodding_is_warning():
+    assessment = assess_risk(DriverSignals(head_nodding=True))
+
+    assert assessment.score == 4
+    assert assessment.level is RiskLevel.WARNING
+    assert assessment.reasons == ("head nodding detected",)
+
+
+def test_head_nodding_under_eye_occlusion_escalates_to_critical():
+    assessment = assess_risk(DriverSignals(head_nodding=True, eye_occluded=True))
+
+    assert assessment.score >= 6
+    assert assessment.level is RiskLevel.CRITICAL
+    assert "head nodding detected" in assessment.reasons

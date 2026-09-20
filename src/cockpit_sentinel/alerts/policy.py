@@ -61,8 +61,8 @@ def load_alert_policy(path: Path) -> AlertPolicy:
     if set(weights) != expected_signals:
         raise PolicyConfigurationError("Alert policy weights must define every driver signal.")
 
-    if not all(isinstance(value, int) and value > 0 for value in weights.values()):
-        raise PolicyConfigurationError("Alert policy weights must be positive integers.")
+    if not all(isinstance(value, int) and value >= 0 for value in weights.values()):
+        raise PolicyConfigurationError("Alert policy weights must be non-negative integers.")
 
     try:
         caution_score = thresholds["caution"]

@@ -113,6 +113,9 @@ def merge_signals(drowsiness: DriverSignals, distraction: DriverSignals) -> Driv
         smoking_detected=distraction.smoking_detected,
         perclos_fatigue=drowsiness.perclos_fatigue,
         microsleep_detected=drowsiness.microsleep_detected,
+        talking=drowsiness.talking,
+        head_nodding=drowsiness.head_nodding,
+        eye_occluded=drowsiness.eye_occluded,
     )
 
 
@@ -123,7 +126,7 @@ def draw_monitor_overlay(
 
     image = frame.copy()
     color = RISK_COLORS[assessment.level]
-    cv2.rectangle(image, (0, 0), (image.shape[1], 112), (25, 25, 25), thickness=-1)
+    cv2.rectangle(image, (0, 0), (image.shape[1], 118), (25, 25, 25), thickness=-1)
     cv2.putText(
         image,
         f"Risk: {assessment.level.upper()} ({assessment.score})",
@@ -134,7 +137,23 @@ def draw_monitor_overlay(
         2,
         cv2.LINE_AA,
     )
+
+    # Occlusion / Sunglasses mode badge
+    if analysis.eye_occluded:
+        cv2.putText(
+            image,
+            "[SUNGLASSES MODE]",
+            (image.shape[1] - 220, 32),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 200, 255),
+            2,
+            cv2.LINE_AA,
+        )
+
     status = ", ".join(assessment.reasons) if assessment.reasons else "attentive"
+    if analysis.talking and not assessment.reasons:
+        status = "attentive (talking)"
     cv2.putText(
         image,
         f"Status: {status}",
@@ -147,23 +166,44 @@ def draw_monitor_overlay(
     )
 
     if analysis.face_detected:
-        perclos_str = (
-            f"PERCLOS: {analysis.perclos * 100:.1f}%"
-            if analysis.perclos is not None
-            else "PERCLOS: --"
+        if analysis.eye_occluded:
+            ear_str = "EAR: occluded"
+            perclos_str = "PERCLOS: --"
+        else:
+            ear_str = (
+                f"EAR: {analysis.eye_aspect_ratio:.2f}"
+                if analysis.eye_aspect_ratio is not None
+                else "EAR: --"
+            )
+            perclos_str = (
+                f"PERCLOS: {analysis.perclos * 100:.1f}%"
+                if analysis.perclos is not None
+                else "PERCLOS: --"
+            )
+
+        mar_str = (
+            f"MAR: {analysis.mouth_aspect_ratio:.2f}"
+            if analysis.mouth_aspect_ratio is not None
+            else "MAR: --"
         )
-        metrics = [
-            f"EAR: {analysis.eye_aspect_ratio:.2f}",
-            f"MAR: {analysis.mouth_aspect_ratio:.2f}",
-            f"Yaw: {analysis.head_yaw_degrees:.1f} deg",
-            perclos_str,
-        ]
+        yaw_str = (
+            f"Yaw: {analysis.head_yaw_degrees:.1f}"
+            if analysis.head_yaw_degrees is not None
+            else "Yaw: --"
+        )
+        pitch_str = (
+            f"Pitch: {analysis.head_pitch_degrees:.1f}"
+            if analysis.head_pitch_degrees is not None
+            else "Pitch: --"
+        )
+
+        metrics = [ear_str, mar_str, yaw_str, pitch_str, perclos_str]
         cv2.putText(
             image,
             " | ".join(metrics),
-            (16, 92),
+            (16, 95),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
+            0.48,
             (210, 210, 210),
             1,
             cv2.LINE_AA,
@@ -172,7 +212,7 @@ def draw_monitor_overlay(
         cv2.putText(
             image,
             "Face not detected",
-            (16, 92),
+            (16, 95),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.5,
             (210, 210, 210),
@@ -180,9 +220,9 @@ def draw_monitor_overlay(
             cv2.LINE_AA,
         )
 
-    # Highlight micro-sleep state with high-urgency flashing warning banner
+    # Urgent emergency banners at bottom of display
+    h, w = image.shape[:2]
     if analysis.microsleep_detected:
-        h, w = image.shape[:2]
         cv2.rectangle(image, (0, h - 45), (w, h), (0, 0, 220), thickness=-1)
         cv2.putText(
             image,
@@ -190,6 +230,23 @@ def draw_monitor_overlay(
             (max(16, w // 2 - 230), h - 14),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.75,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+    elif analysis.head_nodding:
+        banner_text = (
+            "!!! HEAD NODDING (SUNGLASSES FALLBACK) - WAKE UP !!!"
+            if analysis.eye_occluded
+            else "!!! HEAD DROOP / NODDING DETECTED - STAY ALERT !!!"
+        )
+        cv2.rectangle(image, (0, h - 45), (w, h), (0, 69, 255), thickness=-1)
+        cv2.putText(
+            image,
+            banner_text,
+            (max(16, w // 2 - 280), h - 14),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
             (255, 255, 255),
             2,
             cv2.LINE_AA,

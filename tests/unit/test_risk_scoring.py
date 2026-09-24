@@ -58,17 +58,18 @@ def test_talking_is_safe_with_zero_weight():
     assert assessment.reasons == ()
 
 
-def test_head_nodding_is_warning():
-    assessment = assess_risk(DriverSignals(head_nodding=True))
+def test_smoking_detection_is_warning():
+    assessment = assess_risk(DriverSignals(smoking_detected=True))
 
     assert assessment.score == 4
     assert assessment.level is RiskLevel.WARNING
-    assert assessment.reasons == ("head nodding detected",)
+    assert assessment.reasons == ("smoking detected",)
 
 
-def test_head_nodding_under_eye_occlusion_escalates_to_critical():
-    assessment = assess_risk(DriverSignals(head_nodding=True, eye_occluded=True))
+def test_smoking_and_phone_triggers_critical():
+    assessment = assess_risk(DriverSignals(smoking_detected=True, phone_detected=True))
 
-    assert assessment.score >= 6
+    assert assessment.score == 8
     assert assessment.level is RiskLevel.CRITICAL
-    assert "head nodding detected" in assessment.reasons
+    assert "smoking detected" in assessment.reasons
+    assert "phone detected" in assessment.reasons

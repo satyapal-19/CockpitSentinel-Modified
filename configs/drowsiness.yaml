@@ -8,5 +8,3 @@ microsleep_threshold_seconds: 1.5
 yawn_min_duration_seconds: 1.5
 speech_mar_threshold: 0.38
 speech_oscillation_hz: 1.5
-head_pitch_threshold_degrees: 15.0
-eye_contrast_threshold: 12.0

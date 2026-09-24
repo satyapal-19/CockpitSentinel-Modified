@@ -100,6 +100,8 @@ def extract_biometric_signature(
         dist(pt(LEFT_CHEEK), pt(CHIN_TIP)) / scale,  # Left cheek to chin
         dist(pt(RIGHT_CHEEK), pt(CHIN_TIP)) / scale,  # Right cheek to chin
     ]
+    if any(math.isnan(f) or math.isinf(f) for f in features):
+        return None
     return features
 
 
@@ -120,7 +122,7 @@ def cosine_similarity(vec_a: Sequence[float], vec_b: Sequence[float]) -> float:
 class DriverRecognizer:
     """Recognizes known driver profiles from real-time facial landmark geometry."""
 
-    def __init__(self, match_threshold: float = 0.94) -> None:
+    def __init__(self, match_threshold: float = 0.90) -> None:
         self.match_threshold = match_threshold
 
     def match(

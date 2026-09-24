@@ -34,24 +34,24 @@
 
 ## Key Features
 
-| Module | What It Detects / Solves | How It Works |
-| :--- | :--- | :--- |
-| **Auto Driver Recognition** | Personalized baseline & multi-driver identity | 20-D normalized bone distance signature matching ($\ge 92\%$); auto-binds personalized thresholds upon startup |
-| **3s Auto-Calibration** | Custom EAR & MAR thresholds per facial anatomy | 3-second baseline capture computes optimal thresholds ($\text{EAR}_{th} = \mu \times 0.70$, $\text{MAR}_{th} = \mu \times 2.80$) |
-| **Telematics Web Dashboard** | Real-time monitoring & profile management | FastAPI + WebSockets HUD, live video feed, real-time gauges, profile manager, and interactive boundary sliders |
-| **P80 PERCLOS & Micro-Sleep** | Progressive fatigue & acute micro-sleeps | Rolling 30s/60s temporal sliding window; $>1.5\text{s}$ continuous eye closure triggers immediate `CRITICAL` |
-| **Speech vs. Yawn Discrimination** | Distinguishes conversational speech from yawns | Temporal derivative $\frac{d(\text{MAR})}{dt}$ and oscillation frequency analysis over a rolling buffer |
-| **Sunglasses Occlusion Fallback** | Detects dark/polarized sunglasses and glare | Eye ROI luminance contrast variance ($\sigma < 12.0$); transitions to secondary indicators (head pitch droop & yawns) |
-| **3D Head Pose & Nodding** | Downward head droop & cyclic nod-offs | Full 3D Euler angles (Pitch, Yaw, Roll) via PnP decomposition; pitch $\ge 15^\circ$ forward droop detection |
-| **Distraction Detection** | Handheld mobile phone use & smoking | YOLOv8 + YOLOWorld open-vocabulary zero-shot object detection |
-| **3-Tier Contextual Audio** | Acoustic alerts matched to severity | Non-blocking background worker thread with cooldown throttling (Caution, Warning, Critical siren) |
-| **Device Agnostic** | GPU/NPU acceleration across platforms | Auto-detects NVIDIA CUDA, Apple Silicon MPS, and CPU fallback |
+| Module                                   | What It Detects / Solves                       | How It Works                                                                                                                         |
+| :--------------------------------------- | :--------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------- |
+| **Auto Driver Recognition**        | Personalized baseline & multi-driver identity  | 20-D normalized bone distance signature matching ($\ge 90\%$); auto-binds personalized thresholds upon startup                     |
+| **3s Auto-Calibration**            | Custom EAR & MAR thresholds per facial anatomy | 3-second baseline capture computes optimal thresholds and enrolls facial biometric signatures into the profile                        |
+| **Telematics Web Dashboard**       | Real-time monitoring & profile management      | FastAPI + WebSockets HUD, live video feed, real-time gauges, profile manager, and interactive boundary sliders                       |
+| **P80 PERCLOS & Micro-Sleep**      | Progressive fatigue & acute micro-sleeps       | Rolling 30s/60s temporal sliding window; $>1.5\text{s}$ continuous eye closure triggers immediate `CRITICAL`                         |
+| **Speech vs. Yawn Discrimination** | Distinguishes conversational speech from yawns | Temporal derivative $\frac{d(\text{MAR})}{dt}$ and oscillation frequency analysis over a rolling buffer                              |
+| **Strengthened Distraction**       | Handheld mobile phone use & smoking / vaping   | YOLOv8 + YOLOWorld open-vocabulary detection with temporal persistence filtering (12 frames hysteresis)                             |
+| **Head Pose & Attention**          | Looking away & inattentive gaze directions     | Full 3D Euler angles (Pitch, Yaw, Roll) via PnP matrix decomposition; yaw $\ge 30^\circ$ triggers inattentive alerts                |
+| **3-Tier Contextual Audio**        | Acoustic alerts matched to severity            | Non-blocking background worker thread with cooldown throttling (Caution chime, Warning double-tone, Critical siren)                  |
+| **Device Agnostic**                | GPU/NPU acceleration across platforms          | Auto-detects NVIDIA CUDA, Apple Silicon MPS, and CPU fallback                                                                        |
 
 ---
 
 ## Algorithmic Innovations (Solving Real-World CV Edge Cases)
 
 ### 1. Speech vs. Yawn Discrimination (Eliminating False Positives)
+
 * **The Problem:** Standard Mouth Aspect Ratio (MAR) static thresholding triggers constant false alarms when the driver talks to passengers, sings along to music, or chews gum.
 * **The Solution (`YawnSpeechDiscriminator`):**
   * Speech manifests as rapid, oscillating mouth aperture fluctuations ($\ge 1.5\text{ Hz}$) with short durations ($< 0.5\text{s}$).
@@ -59,18 +59,24 @@
   * When speech oscillations are detected, false yawn alarms are automatically suppressed.
 
 ### 2. Automotive Industry-Standard PERCLOS Metric
+
 * **The Problem:** Simple consecutive frame counting fails to assess cumulative, progressive drowsiness and slow eyelid droops.
 * **The Solution (`PERCLOSTracker`):**
   * Implements the **P80 PERCLOS** standard recognized by NHTSA and Euro NCAP:
-    $$\text{PERCLOS} = \frac{\text{Time eyes are closed}}{\text{Observation Window (e.g. 30s – 60s)}} \times 100$$
+    $$
+    \text{PERCLOS} = \frac{\text{Time eyes are closed}}{\text{Observation Window (e.g. 30s – 60s)}} \times 100
+    $$
   * Evaluates progressive fatigue ($\text{PERCLOS} \ge 20\%$).
   * Tracks continuous closure duration and triggers `microsleep_detected` if eyes remain closed for $\ge 1.5\text{s}$.
 
 ### 3. Sunglasses / Occlusion Fallback Mode
+
 * **The Problem:** Drivers frequently wear sunglasses or glare-resistant glasses, causing eye landmarks to collapse or become completely unreliable.
 * **The Solution (`EyeOcclusionDetector`):**
   * Evaluates grayscale standard deviation and mean luminance in the eye bounding box:
-    $$\sigma = \text{std}(\text{ROI}_{\text{eye}})$$
+    $$
+    \sigma = \text{std}(\text{ROI}_{\text{eye}})
+    $$
   * Sunglasses exhibit flat, uniform dark tint ($\sigma < 12.0$ or $\mu < 28.0$).
   * When occlusion is detected:
     * System displays `[SUNGLASSES MODE]` on the HUD.
@@ -80,21 +86,33 @@
       2. **Mouth Yawning (`yawning`)**: Monitored via visible mouth landmarks with speech filtering.
 
 ### 4. Auto Driver Recognition & Multi-Driver Profiles
+
 * **The Problem:** Generic thresholds fail across diverse drivers. A driver with naturally narrow eyes will suffer false drowsiness alarms under static $0.22$ EAR, while a driver with wide eyes might be drowsy at $0.24$.
 * **The Solution (`DriverRecognizer` & `ProfileManager`):**
   * **Privacy-First Bone Distance Signatures:** Instead of saving unencrypted face images, CockpitSentinel extracts a 20-dimensional scale-invariant geometric ratio vector:
-    $$\vec{S} = \left[ \frac{\|\mathbf{p}_{i} - \mathbf{p}_{j}\|_2}{D_{\text{interocular}}} \right] \quad (i, j \in \text{key facial bone landmarks})$$
+    $$
+    \vec{S} = \left[ \frac{\|\mathbf{p}_{i} - \mathbf{p}_{j}\|_2}{D_{\text{interocular}}} \right] \quad (i, j \in \text{key facial bone landmarks})
+    $$
   * **Seamless Startup Recognition:** During the first 60 frames after ignition/start, the recognizer calculates cosine similarity against enrolled profiles ($\ge 0.92$ match confidence):
-    $$\text{Cosine Similarity} = \frac{\vec{u} \cdot \vec{v}}{\|\vec{u}\|_2 \|\vec{v}\|_2}$$
+    $$
+    \text{Cosine Similarity} = \frac{\vec{u} \cdot \vec{v}}{\|\vec{u}\|_2 \|\vec{v}\|_2}
+    $$
   * **Zero-Intervention Threshold Binding:** Once recognized, the monitor dynamically swaps active thresholds (`ear_threshold`, `mar_threshold`, `head_pitch`) to match the identified driver's personal anatomy.
 
 ### 5. One-Click 3-Second Auto-Calibration
+
 * **The Problem:** Drivers shouldn't need to manually guess or tweak numerical ratios in configuration files.
 * **The Solution:**
   * Driver sits comfortably in normal driving posture for 3 seconds (90 frames).
   * CockpitSentinel calculates resting geometry baselines ($\mu_{\text{EAR}}$, $\mu_{\text{MAR}}$) and derives custom bounds:
-    $$\text{EAR}_{\text{threshold}} = \max\left(0.14, \min(0.28, \mu_{\text{EAR}} \times 0.70)\right)$$
-    $$\text{MAR}_{\text{threshold}} = \max\left(0.52, \min(0.75, \mu_{\text{MAR}} \times 2.80)\right)$$
+
+    $$
+    \text{EAR}_{\text{threshold}} = \max\left(0.14, \min(0.28, \mu_{\text{EAR}} \times 0.70)\right)
+    $$
+
+    $$
+    \text{MAR}_{\text{threshold}} = \max\left(0.52, \min(0.75, \mu_{\text{MAR}} \times 2.80)\right)
+    $$
   * Updates disk persistence (`data/profiles.json`) and binds immediately into the live pipeline.
 
 ---
@@ -123,6 +141,7 @@ CockpitSentinel includes a full-stack, responsive web dashboard built with **Fas
 ```
 
 ### Dashboard Capabilities:
+
 - **Live Video Streaming**: Real-time MJPEG feed streamed at 30 FPS directly to the browser.
 - **25 Hz WebSocket Telemetry**: Instantaneous pushing of facial angles, closure ratios, fatigue metrics, and active alert state.
 - **Driver Profile Hub**: Create, switch, or inspect drivers on-the-fly without restarting the video feed.
@@ -136,11 +155,11 @@ CockpitSentinel includes a full-stack, responsive web dashboard built with **Fas
 
 Audio alerts are generated asynchronously on a dedicated daemon worker thread consuming from a bounded queue, ensuring **zero frame drops** and steady FPS in video processing.
 
-| Tier | Trigger Severity | Acoustic Cue | Cooldown |
-| :--- | :--- | :--- | :--- |
-| **Tier 1 (Caution)** | Score $\ge 2$ (e.g., yawning, PERCLOS fatigue) | Soft chime (800 Hz, 150ms) | 5.0 seconds |
-| **Tier 2 (Warning)** | Score $\ge 4$ (e.g., phone, head droop) | Urgent double-tone (1200 Hz, 250ms $\times$ 2) | 6.0 seconds |
-| **Tier 3 (Critical)**| Score $\ge 6$ (e.g., micro-sleep, combined hazards) | Emergency pulsing siren (2000 Hz, 120ms $\times$ 4) | 2.0 seconds |
+| Tier                        | Trigger Severity                                     | Acoustic Cue                                         | Cooldown    |
+| :-------------------------- | :--------------------------------------------------- | :--------------------------------------------------- | :---------- |
+| **Tier 1 (Caution)**  | Score$\ge 2$ (e.g., yawning, PERCLOS fatigue)      | Soft chime (800 Hz, 150ms)                           | 5.0 seconds |
+| **Tier 2 (Warning)**  | Score$\ge 4$ (e.g., phone, head droop)             | Urgent double-tone (1200 Hz, 250ms$\times$ 2)      | 6.0 seconds |
+| **Tier 3 (Critical)** | Score$\ge 6$ (e.g., micro-sleep, combined hazards) | Emergency pulsing siren (2000 Hz, 120ms$\times$ 4) | 2.0 seconds |
 
 > Use the `--no-audio` flag if you wish to run the monitor silently with visual overlay alerts only.
 
@@ -150,18 +169,18 @@ Audio alerts are generated asynchronously on a dedicated daemon worker thread co
 
 The dashboard provides a complete RESTful and WebSocket API:
 
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `GET` | `/` | Responsive HTML5 telematics dashboard web interface |
-| `GET` | `/api/profiles` | List all registered driver profiles |
-| `POST` | `/api/profiles` | Create a new driver profile (`name`, resting & threshold EAR/MAR) |
-| `GET` | `/api/profiles/{id}` | Retrieve details for a specific driver profile |
-| `PUT` | `/api/profiles/{id}` | Update thresholds (EAR, MAR, Pitch) for a profile |
-| `POST` | `/api/profiles/{id}/calibrate` | Run 3-second auto-calibration on the driver profile |
-| `POST` | `/api/profiles/{id}/activate` | Set active driver profile for the live pipeline |
-| `GET` | `/api/telemetry` | Get latest instantaneous telemetry snapshot (JSON) |
-| `GET` | `/api/video_feed` | Multipart MJPEG real-time video stream |
-| `WS` | `/ws/telemetry` | Bi-directional WebSocket streaming telemetry at 25 Hz |
+| Method   | Endpoint                         | Description                                                         |
+| :------- | :------------------------------- | :------------------------------------------------------------------ |
+| `GET`  | `/`                            | Responsive HTML5 telematics dashboard web interface                 |
+| `GET`  | `/api/profiles`                | List all registered driver profiles                                 |
+| `POST` | `/api/profiles`                | Create a new driver profile (`name`, resting & threshold EAR/MAR) |
+| `GET`  | `/api/profiles/{id}`           | Retrieve details for a specific driver profile                      |
+| `PUT`  | `/api/profiles/{id}`           | Update thresholds (EAR, MAR, Pitch) for a profile                   |
+| `POST` | `/api/profiles/{id}/calibrate` | Run 3-second auto-calibration on the driver profile                 |
+| `POST` | `/api/profiles/{id}/activate`  | Set active driver profile for the live pipeline                     |
+| `GET`  | `/api/telemetry`               | Get latest instantaneous telemetry snapshot (JSON)                  |
+| `GET`  | `/api/video_feed`              | Multipart MJPEG real-time video stream                              |
+| `WS`   | `/ws/telemetry`                | Bi-directional WebSocket streaming telemetry at 25 Hz               |
 
 ---
 
@@ -233,8 +252,9 @@ pytest --cov=cockpit_sentinel
 # Launch the live desktop monitor
 python -m cockpit_sentinel.pipeline.live_monitor
 
-# Or launch the Telematics Web Dashboard
-python scripts/run_dashboard.py
+# Or launch the Telematics Web Dashboard (One-Click / Auto-Recovery)
+python run_dashboard.py
+# (On Windows, you can also simply double-click start_dashboard.bat)
 ```
 
 ### 2. macOS / Linux Setup
@@ -257,11 +277,11 @@ python -m cockpit_sentinel.pipeline.live_monitor
 ### 1. Telematics Web Dashboard (Recommended)
 
 ```bash
-# Launch dashboard at http://127.0.0.1:8000
-python scripts/run_dashboard.py
+# Launch dashboard at http://127.0.0.1:8000 (auto-opens browser, auto-frees stale ports)
+python run_dashboard.py
 
-# Custom host, port, or video source
-python scripts/run_dashboard.py --host 0.0.0.0 --port 8000 --source 0 --device cuda
+# Custom host, port, video source, or device
+python run_dashboard.py --host 0.0.0.0 --port 8000 --source 0 --device cuda
 ```
 
 ### 2. Desktop HUD Monitor
@@ -291,12 +311,12 @@ Press **Q** or **Esc** inside the video display window to stop cleanly.
 
 All runtime thresholds are managed via YAML in [`configs/`](configs/):
 
-| Configuration File | Controlled Parameters |
-| :--- | :--- |
-| [`drowsiness.yaml`](configs/drowsiness.yaml) | `eye_aspect_ratio_threshold` (0.22), `perclos_window_seconds` (30.0), `perclos_fatigue_threshold` (0.20), `microsleep_threshold_seconds` (1.5), `yawn_min_duration_seconds` (1.5), `speech_mar_threshold` (0.38), `head_pitch_threshold_degrees` (15.0), `eye_contrast_threshold` (12.0) |
-| [`distraction.yaml`](configs/distraction.yaml) | YOLO confidence thresholds for mobile phone and smoking detection |
-| [`alerts.yaml`](configs/alerts.yaml) | Signal weights (`microsleep`: 6, `head_nodding`: 4, `phone`: 4, `eyes_closed`: 3, `smoking`: 3, `perclos`: 3, `yawning`: 2, `looking_away`: 2, `talking`: 0, `eye_occluded`: 0) and risk thresholds (Caution $\ge 2$, Warning $\ge 4$, Critical $\ge 6$) |
-| [`models.yaml`](configs/models.yaml) | Model filenames and resolution registry |
+| Configuration File                              | Controlled Parameters                                                                                                                                                                                                                                                                                    |
+| :---------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`drowsiness.yaml`](configs/drowsiness.yaml)   | `eye_aspect_ratio_threshold` (0.22), `perclos_window_seconds` (30.0), `perclos_fatigue_threshold` (0.20), `microsleep_threshold_seconds` (1.5), `yawn_min_duration_seconds` (1.5), `speech_mar_threshold` (0.38), `head_pitch_threshold_degrees` (15.0), `eye_contrast_threshold` (12.0) |
+| [`distraction.yaml`](configs/distraction.yaml) | YOLO confidence thresholds for mobile phone and smoking detection                                                                                                                                                                                                                                        |
+| [`alerts.yaml`](configs/alerts.yaml)           | Signal weights (`microsleep`: 6, `head_nodding`: 4, `phone`: 4, `eyes_closed`: 3, `smoking`: 3, `perclos`: 3, `yawning`: 2, `looking_away`: 2, `talking`: 0, `eye_occluded`: 0) and risk thresholds (Caution $\ge 2$, Warning $\ge 4$, Critical $\ge 6$)                       |
+| [`models.yaml`](configs/models.yaml)           | Model filenames and resolution registry                                                                                                                                                                                                                                                                  |
 
 ---
 
@@ -370,6 +390,7 @@ pytest --cov=cockpit_sentinel --cov-report=term-missing
 ```
 
 **Quality Standards:**
+
 - Fully linted with `ruff check .` (0 warnings).
 - Code formatting enforced with `ruff format .`.
 - Full typing safety and validation across all configurations.
@@ -378,8 +399,7 @@ pytest --cov=cockpit_sentinel --cov-report=term-missing
 
 ## Team
 
-**Walchand College of Engineering, Sangli** — Department of Computer Science & Engineering  
-*Mini Project 2026–27*
+**Walchand College of Engineering, Sangli** — Department of Computer Science & Engineering*Mini Project 2026–27*
 
 - **Satyapal Gaikwad**
 - **Darshan Patil**

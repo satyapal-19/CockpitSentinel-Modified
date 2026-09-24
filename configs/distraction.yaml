@@ -1,6 +1,13 @@
-phone_confidence_threshold: 0.35
-smoking_confidence_threshold: 0.20
+phone_confidence_threshold: 0.28
+smoking_confidence_threshold: 0.18
+persistence_frames: 12
 smoking_labels:
   - cigarette
+  - smoking cigarette
   - smoking
   - vape
+  - vaping
+  - cigar
+  - e-cigarette
+  - electronic cigarette
+  - holding cigarette

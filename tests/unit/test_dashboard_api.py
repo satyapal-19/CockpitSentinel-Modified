@@ -91,3 +91,10 @@ def test_telemetry_state_update_and_sampling():
     d = tel.to_dict()
     assert "fps" in d
     assert "camera_active" in d
+    assert "phone_detected" in d
+    assert "smoking_detected" in d
+
+    tel.signature_samples.append([1.0] * 20)
+    sigs = tel.get_recent_signatures(count=5)
+    assert len(sigs) == 1
+    assert len(sigs[0]) == 20

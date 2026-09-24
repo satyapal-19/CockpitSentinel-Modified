@@ -164,8 +164,11 @@
               <span>📹</span> Live In-Cabin Video
             </h2>
             <div class="flex items-center gap-2">
-              <span id="sunglassesIndicator" class="hidden text-[11px] font-bold px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                🕶️ SUNGLASSES MODE
+              <span id="phoneIndicator" class="hidden text-[11px] font-bold px-2 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30">
+                📱 PHONE ACTIVE
+              </span>
+              <span id="smokingIndicator" class="hidden text-[11px] font-bold px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                🚬 SMOKING DETECTED
               </span>
               <span id="liveRiskBadge" class="text-xs font-bold px-2.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-mono">
                 SAFE (0)
@@ -378,7 +381,7 @@
               document.getElementById("cameraStatusText").innerHTML = `Camera Active (<span class="font-mono font-bold">${data.fps ? data.fps.toFixed(1) : "30.0"}</span> FPS)`;
             }
 
-            document.getElementById("telEar").innerText = data.eye_occluded ? "occluded" : data.ear.toFixed(2);
+            document.getElementById("telEar").innerText = data.ear !== null ? data.ear.toFixed(2) : "--";
             document.getElementById("telMar").innerText = data.mar !== null ? data.mar.toFixed(2) : "--";
             document.getElementById("telPose").innerText = `${data.pitch.toFixed(1)}° / ${data.yaw.toFixed(1)}°`;
             document.getElementById("telPerclos").innerText = data.perclos !== null ? `${(data.perclos * 100).toFixed(1)}%` : "--";
@@ -394,12 +397,28 @@
               riskBadge.className = "text-xs font-bold px-2.5 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30 font-mono";
             }
 
-            // Sunglasses indicator
-            const sunEl = document.getElementById("sunglassesIndicator");
-            if (data.eye_occluded) {
-              sunEl.classList.remove("hidden");
-            } else {
-              sunEl.classList.add("hidden");
+            // Distraction: Phone indicator
+            const phoneEl = document.getElementById("phoneIndicator");
+            if (phoneEl) {
+              if (data.phone_detected) {
+                phoneEl.classList.remove("hidden");
+                const conf = data.phone_confidence ? ` (${(data.phone_confidence * 100).toFixed(0)}%)` : "";
+                phoneEl.innerText = `📱 PHONE ACTIVE${conf}`;
+              } else {
+                phoneEl.classList.add("hidden");
+              }
+            }
+
+            // Distraction: Smoking indicator
+            const smokingEl = document.getElementById("smokingIndicator");
+            if (smokingEl) {
+              if (data.smoking_detected) {
+                smokingEl.classList.remove("hidden");
+                const conf = data.smoking_confidence ? ` (${(data.smoking_confidence * 100).toFixed(0)}%)` : "";
+                smokingEl.innerText = `🚬 SMOKING DETECTED${conf}`;
+              } else {
+                smokingEl.classList.add("hidden");
+              }
             }
 
             // Recognized driver

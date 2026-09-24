@@ -28,8 +28,6 @@ def test_policy_rejects_non_increasing_thresholds(tmp_path):
   perclos_fatigue: 3
   microsleep_detected: 6
   talking: 0
-  head_nodding: 4
-  eye_occluded: 0
 thresholds:
   caution: 4
   warning: 4

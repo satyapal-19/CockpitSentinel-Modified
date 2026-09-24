@@ -3,12 +3,10 @@ weights:
   yawning: 2
   looking_away: 2
   phone_detected: 4
-  smoking_detected: 3
+  smoking_detected: 4
   perclos_fatigue: 3
   microsleep_detected: 6
   talking: 0
-  head_nodding: 4
-  eye_occluded: 0
 
 thresholds:
   caution: 2

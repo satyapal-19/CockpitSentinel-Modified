@@ -9,7 +9,6 @@ from cockpit_sentinel.drowsiness.detector import (
     load_drowsiness_config,
     mouth_aspect_ratio,
 )
-from cockpit_sentinel.drowsiness.occlusion import EyeOcclusionDetector
 from cockpit_sentinel.drowsiness.recognition import (
     DriverProfile,
     DriverRecognizer,
@@ -24,7 +23,6 @@ __all__ = [
     "DrowsinessAnalysis",
     "DrowsinessConfig",
     "DrowsinessDetector",
-    "EyeOcclusionDetector",
     "ProfileManager",
     "SignalStabilizer",
     "YawnSpeechDiscriminator",

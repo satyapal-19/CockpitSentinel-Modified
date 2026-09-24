@@ -120,6 +120,11 @@ class MonitoringWorker:
         if self._monitor:
             self._monitor.apply_profile(profile)
 
+    def reset_recognition(self) -> None:
+        """Reset driver recognition on the active live monitor."""
+        if self._monitor:
+            self._monitor.reset_recognition()
+
     def _initialize_pipeline(self) -> LiveMonitor:
         drowsiness_cfg_path = resolve_config_path("drowsiness.yaml", custom_dir=self.config_dir)
         alerts_cfg_path = resolve_config_path("alerts.yaml", custom_dir=self.config_dir)
@@ -240,20 +245,30 @@ class MonitoringWorker:
             self._render_diagnostic_frame("Pipeline Initialization Error", str(exc))
             return
 
-        capture: cv2.VideoCapture | None = None
-        if isinstance(self.source, int):
-            capture = cv2.VideoCapture(self.source, cv2.CAP_DSHOW)
-            if not capture.isOpened():
-                capture = cv2.VideoCapture(self.source)
-        else:
-            capture = cv2.VideoCapture(self.source)
+        def _open_camera() -> cv2.VideoCapture | None:
+            cap = None
+            if isinstance(self.source, int):
+                cap = cv2.VideoCapture(self.source, cv2.CAP_DSHOW)
+                if not cap.isOpened():
+                    cap = cv2.VideoCapture(self.source)
+            else:
+                cap = cv2.VideoCapture(self.source)
+            return cap if (cap is not None and cap.isOpened()) else None
 
-        if not capture.isOpened():
-            logger.error("Could not open video source: %s", self.source)
+        capture = _open_camera()
+        while capture is None and not self._stop_event.is_set():
+            logger.warning("Could not open video source: %s. Retrying in 2 seconds...", self.source)
             self._render_diagnostic_frame(
-                "Camera Not Detected",
-                "Ensure webcam is plugged in and permissions are granted.",
+                "Camera Connecting...",
+                "Waiting for webcam access. Retrying automatically...",
             )
+            time.sleep(2.0)
+            capture = _open_camera()
+
+        if self._stop_event.is_set() or capture is None:
+            if capture is not None:
+                capture.release()
+            self._cleanup()
             return
 
         fps_timer: float | None = None
@@ -272,7 +287,12 @@ class MonitoringWorker:
                 if fps_timer is None:
                     fps_timer = time.time()
 
-                processed = monitor.process(frame)
+                try:
+                    processed = monitor.process(frame)
+                except Exception as exc:
+                    logger.warning("Error processing frame: %s", exc)
+                    time.sleep(0.01)
+                    continue
 
                 frames_this_second += 1
                 now = time.time()

@@ -18,7 +18,6 @@ from mediapipe.tasks.python import vision
 from mediapipe.tasks.python.core.base_options import BaseOptions
 
 from cockpit_sentinel.domain import DriverSignals
-from cockpit_sentinel.drowsiness.occlusion import EyeOcclusionDetector
 from cockpit_sentinel.drowsiness.yawn_speech import YawnSpeechDiscriminator
 
 LEFT_EYE = (33, 160, 158, 133, 153, 144)
@@ -59,8 +58,6 @@ class DrowsinessConfig:
     yawn_min_duration_seconds: float = 1.5
     speech_mar_threshold: float = 0.38
     speech_oscillation_hz: float = 1.5
-    head_pitch_threshold_degrees: float = 15.0
-    eye_contrast_threshold: float = 12.0
 
     def __post_init__(self) -> None:
         if not 0 < self.eye_aspect_ratio_threshold < 1:
@@ -83,10 +80,6 @@ class DrowsinessConfig:
             raise ValueError("speech_mar_threshold must be positive.")
         if self.speech_oscillation_hz <= 0:
             raise ValueError("speech_oscillation_hz must be positive.")
-        if not 0 < self.head_pitch_threshold_degrees <= 90:
-            raise ValueError("head_pitch_threshold_degrees must be between 0 and 90.")
-        if self.eye_contrast_threshold <= 0:
-            raise ValueError("eye_contrast_threshold must be positive.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,9 +96,7 @@ class DrowsinessAnalysis:
     perclos: float | None = None
     closure_duration_seconds: float = 0.0
     microsleep_detected: bool = False
-    eye_occluded: bool = False
     talking: bool = False
-    head_nodding: bool = False
     landmarks: Sequence[Landmark] | None = None
 
 
@@ -117,11 +108,9 @@ def load_drowsiness_config(path: Path) -> DrowsinessConfig:
     if not isinstance(raw_config, dict):
         raise ValueError("Drowsiness configuration must be a YAML mapping.")
 
-    expected_keys = set(DrowsinessConfig.__dataclass_fields__)
-    if set(raw_config) != expected_keys:
-        raise ValueError("Drowsiness configuration must define every threshold.")
-
-    return DrowsinessConfig(**raw_config)
+    valid_fields = set(DrowsinessConfig.__dataclass_fields__)
+    filtered = {k: v for k, v in raw_config.items() if k in valid_fields}
+    return DrowsinessConfig(**filtered)
 
 
 def eye_aspect_ratio(points: Sequence[tuple[float, float]]) -> float:
@@ -139,38 +128,46 @@ def mouth_aspect_ratio(points: Sequence[tuple[float, float]]) -> float:
 
     if len(points) != 4:
         raise ValueError("Mouth aspect ratio requires exactly four points.")
-    horizontal = dist(points[0], points[3])
     vertical = dist(points[1], points[2])
+    horizontal = dist(points[0], points[3])
     return vertical / horizontal if horizontal else 0.0
 
 
 class SignalStabilizer:
-    """Require a signal to persist for consecutive frames before alerting."""
+    """Require repeated boolean observations before publishing a state change."""
 
-    def __init__(self, minimum_consecutive_frames: int) -> None:
+    def __init__(self, minimum_consecutive_frames: int = 3) -> None:
         if minimum_consecutive_frames < 1:
             raise ValueError("minimum_consecutive_frames must be at least 1.")
-        self._minimum_consecutive_frames = minimum_consecutive_frames
-        self._counts = {name: 0 for name in DriverSignals.__dataclass_fields__}
-
-    def update(self, raw_signals: DriverSignals) -> DriverSignals:
-        stabilized: dict[str, bool] = {}
-        for name in self._counts:
-            active = getattr(raw_signals, name)
-            self._counts[name] = self._counts[name] + 1 if active else 0
-            stabilized[name] = self._counts[name] >= self._minimum_consecutive_frames
-        return DriverSignals(**stabilized)
+        self.minimum_consecutive_frames = minimum_consecutive_frames
+        self._counts = dict.fromkeys(DriverSignals.__dataclass_fields__, 0)
+        self._state = dict.fromkeys(DriverSignals.__dataclass_fields__, False)
 
     def reset(self) -> None:
-        for name in self._counts:
-            self._counts[name] = 0
+        """Clear the running frame counts and published signal state."""
+        for key in self._counts:
+            self._counts[key] = 0
+            self._state[key] = False
+
+    def update(self, raw_signals: DriverSignals) -> DriverSignals:
+        """Advance the frame counters and return the stabilized signals."""
+        for name in DriverSignals.__dataclass_fields__:
+            if getattr(raw_signals, name):
+                self._counts[name] += 1
+                if self._counts[name] >= self.minimum_consecutive_frames:
+                    self._state[name] = True
+            else:
+                self._counts[name] = 0
+                self._state[name] = False
+        return DriverSignals(**self._state)
 
 
 class PERCLOSTracker:
-    """Calculate percentage of eye closure (PERCLOS) and detect micro-sleep events."""
+    """Tracks Proportion of Eye Closure over a rolling temporal window (P80 metric)."""
 
     def __init__(
         self,
+        *,
         window_seconds: float = 30.0,
         fatigue_threshold: float = 0.20,
         microsleep_seconds: float = 1.5,
@@ -185,15 +182,24 @@ class PERCLOSTracker:
         self.window_seconds = window_seconds
         self.fatigue_threshold = fatigue_threshold
         self.microsleep_seconds = microsleep_seconds
-
         self._history: deque[tuple[float, bool]] = deque()
         self._closure_start_time: float | None = None
 
     def update(
         self, eyes_closed: bool, timestamp: float | None = None
     ) -> tuple[float, float, bool, bool]:
-        """Record eye state and return (perclos, closure_duration, is_fatigued, is_microsleep)."""
+        """Record observation and compute (perclos, closure, fatigue, microsleep)."""
         now = time.monotonic() if timestamp is None else timestamp
+        self._history.append((now, eyes_closed))
+
+        cutoff = now - self.window_seconds
+        while self._history and self._history[0][0] < cutoff:
+            self._history.popleft()
+
+        closed_count = sum(1 for _, closed in self._history if closed)
+        total_count = len(self._history)
+        perclos = closed_count / total_count if total_count > 0 else 0.0
+        is_fatigued = perclos >= self.fatigue_threshold
 
         if eyes_closed:
             if self._closure_start_time is None:
@@ -204,86 +210,12 @@ class PERCLOSTracker:
             closure_duration = 0.0
 
         is_microsleep = closure_duration >= self.microsleep_seconds
-
-        self._history.append((now, eyes_closed))
-
-        cutoff = now - self.window_seconds
-        while self._history and self._history[0][0] < cutoff:
-            self._history.popleft()
-
-        closed_count = sum(1 for _, closed in self._history if closed)
-        perclos = (closed_count / len(self._history)) if self._history else 0.0
-        is_fatigued = perclos >= self.fatigue_threshold
-
         return perclos, closure_duration, is_fatigued, is_microsleep
 
     def reset(self) -> None:
         """Clear temporal window and closure timing state."""
         self._history.clear()
         self._closure_start_time = None
-
-
-class HeadNoddingTracker:
-    """Detects downward head droop and nodding behavior indicative of fatigue."""
-
-    def __init__(
-        self,
-        *,
-        pitch_threshold_degrees: float = 15.0,
-        droop_duration_seconds: float = 1.0,
-        window_seconds: float = 4.0,
-    ) -> None:
-        if pitch_threshold_degrees <= 0:
-            raise ValueError("pitch_threshold_degrees must be positive.")
-        if droop_duration_seconds <= 0:
-            raise ValueError("droop_duration_seconds must be positive.")
-        if window_seconds <= 0:
-            raise ValueError("window_seconds must be positive.")
-
-        self.pitch_threshold_degrees = pitch_threshold_degrees
-        self.droop_duration_seconds = droop_duration_seconds
-        self.window_seconds = window_seconds
-        self._droop_start_time: float | None = None
-        self._history: deque[tuple[float, float]] = deque()
-
-    def update(self, pitch: float, timestamp: float | None = None) -> tuple[bool, float]:
-        """Record head pitch and return (is_nodding, sustained_droop_duration)."""
-        now = time.monotonic() if timestamp is None else timestamp
-        self._history.append((now, pitch))
-
-        cutoff = now - self.window_seconds
-        while self._history and self._history[0][0] < cutoff:
-            self._history.popleft()
-
-        # Continuous downward droop
-        if pitch >= self.pitch_threshold_degrees:
-            if self._droop_start_time is None:
-                self._droop_start_time = now
-            droop_duration = now - self._droop_start_time
-        else:
-            self._droop_start_time = None
-            droop_duration = 0.0
-
-        is_sustained = droop_duration >= self.droop_duration_seconds
-
-        # Cyclic nod detection: repeated downward pitch excursions with recovery
-        nod_count = 0
-        in_nod = False
-        for _, p in self._history:
-            if p >= self.pitch_threshold_degrees:
-                if not in_nod:
-                    nod_count += 1
-                    in_nod = True
-            elif p < (self.pitch_threshold_degrees - 5.0):
-                in_nod = False
-
-        is_nodding = is_sustained or (nod_count >= 2)
-        return is_nodding, droop_duration
-
-    def reset(self) -> None:
-        """Clear droop timing and history state."""
-        self._droop_start_time = None
-        self._history.clear()
 
 
 class DrowsinessDetector:
@@ -312,12 +244,6 @@ class DrowsinessDetector:
             yawn_min_duration_seconds=self.config.yawn_min_duration_seconds,
             speech_mar_threshold=self.config.speech_mar_threshold,
             speech_oscillation_hz=self.config.speech_oscillation_hz,
-        )
-        self._occlusion_detector = EyeOcclusionDetector(
-            contrast_threshold=self.config.eye_contrast_threshold,
-        )
-        self._nodding_tracker = HeadNoddingTracker(
-            pitch_threshold_degrees=self.config.head_pitch_threshold_degrees,
         )
 
     @staticmethod
@@ -348,6 +274,7 @@ class DrowsinessDetector:
         return vision.FaceLandmarker.create_from_options(options)
 
     def close(self) -> None:
+        """Release MediaPipe resources explicitly."""
         self._landmarker.close()
 
     def __enter__(self) -> DrowsinessDetector:
@@ -355,6 +282,12 @@ class DrowsinessDetector:
 
     def __exit__(self, *_: object) -> None:
         self.close()
+
+    def reset(self) -> None:
+        """Reset running counters and temporal history across frames."""
+        self._stabilizer.reset()
+        self._perclos_tracker.reset()
+        self._yawn_speech.reset()
 
     def analyze(self, frame: np.ndarray, timestamp: float | None = None) -> DrowsinessAnalysis:
         """Analyze one BGR frame and return stabilized fatigue/attention signals."""
@@ -369,8 +302,6 @@ class DrowsinessDetector:
             self._stabilizer.reset()
             self._perclos_tracker.reset()
             self._yawn_speech.reset()
-            self._occlusion_detector.reset()
-            self._nodding_tracker.reset()
             return DrowsinessAnalysis(signals=DriverSignals(), face_detected=False)
 
         landmarks = result.face_landmarks[0]
@@ -383,25 +314,14 @@ class DrowsinessDetector:
         mar = mouth_aspect_ratio(_pixel_points(landmarks, MOUTH, width, height))
         pitch, yaw, roll = _estimate_head_pose(landmarks, width, height)
 
-        # 1. Sunglasses / Eye Occlusion check
-        is_occluded, _, _ = self._occlusion_detector.update(frame, left_eye_pts, right_eye_pts)
-
-        # 2. Speech vs. Yawn Discrimination
+        # 1. Speech vs. Yawn Discrimination
         is_yawn, is_talking, _ = self._yawn_speech.update(mar, ear=ear, timestamp=timestamp)
 
-        # 3. Head Nodding / Micro-droop check
-        is_nodding, _ = self._nodding_tracker.update(pitch, timestamp=timestamp)
-
-        # 4. Eye closure & PERCLOS
-        if is_occluded:
-            raw_eyes_closed = False
-            perclos, closure_duration, is_fatigued, is_microsleep = 0.0, 0.0, False, False
-            self._perclos_tracker.reset()
-        else:
-            raw_eyes_closed = ear < self.config.eye_aspect_ratio_threshold
-            perclos, closure_duration, is_fatigued, is_microsleep = self._perclos_tracker.update(
-                raw_eyes_closed, timestamp=timestamp
-            )
+        # 2. Eye closure & PERCLOS
+        raw_eyes_closed = ear < self.config.eye_aspect_ratio_threshold
+        perclos, closure_duration, is_fatigued, is_microsleep = self._perclos_tracker.update(
+            raw_eyes_closed, timestamp=timestamp
+        )
 
         raw_signals = DriverSignals(
             eyes_closed=raw_eyes_closed,
@@ -410,32 +330,24 @@ class DrowsinessDetector:
             perclos_fatigue=is_fatigued,
             microsleep_detected=is_microsleep,
             talking=is_talking,
-            head_nodding=is_nodding,
-            eye_occluded=is_occluded,
         )
 
         stabilized = self._stabilizer.update(raw_signals)
         if is_microsleep:
             stabilized = replace(stabilized, microsleep_detected=True)
-        if is_occluded:
-            stabilized = replace(stabilized, eye_occluded=True)
-        if is_nodding:
-            stabilized = replace(stabilized, head_nodding=True)
 
         return DrowsinessAnalysis(
             signals=stabilized,
             face_detected=True,
-            eye_aspect_ratio=ear if not is_occluded else None,
+            eye_aspect_ratio=ear,
             mouth_aspect_ratio=mar,
             head_yaw_degrees=yaw,
             head_pitch_degrees=pitch,
             head_roll_degrees=roll,
-            perclos=perclos if not is_occluded else None,
+            perclos=perclos,
             closure_duration_seconds=closure_duration,
             microsleep_detected=is_microsleep,
-            eye_occluded=is_occluded,
             talking=is_talking,
-            head_nodding=is_nodding,
             landmarks=landmarks,
         )
 

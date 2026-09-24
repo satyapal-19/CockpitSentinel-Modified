@@ -89,10 +89,21 @@ class LiveMonitor:
         self._recognized_driver_name: str | None = None
         self._recognition_confidence: float = 0.0
         self._frames_checked = 0
+        self._recognition_locked: bool = False
+        self._match_votes: dict[str, int] = {}
+
+    def reset_recognition(self) -> None:
+        """Reset driver recognition to evaluate active driver again."""
+        self._recognized_driver_name = None
+        self._recognition_confidence = 0.0
+        self._recognition_locked = False
+        self._match_votes.clear()
+        self._frames_checked = 0
 
     def apply_profile(self, profile: DriverProfile) -> None:
         """Apply a driver profile directly to the active detector."""
         self._recognized_driver_name = profile.name
+        self._recognition_locked = True
         if hasattr(self._detector, "config"):
             curr_cfg = self._detector.config  # type: ignore[attr-defined]
             self._detector.config = replace(  # type: ignore[assignment,attr-defined]
@@ -105,27 +116,27 @@ class LiveMonitor:
         analysis = self._detector.analyze(frame)
 
         # Auto-recognize driver from facial bone geometry
+        self._frames_checked += 1
         if (
             self._profile_manager is not None
-            and self._recognized_driver_name is None
+            and not self._recognition_locked
             and analysis.landmarks is not None
-            and self._frames_checked < 60
+            and (self._frames_checked % 10 == 0)
         ):
-            self._frames_checked += 1
             h, w = frame.shape[:2]
-            profiles = self._profile_manager.get_all()
-            matched, conf = self._recognizer.match(analysis.landmarks, w, h, profiles)
-            if matched is not None:
-                self._recognized_driver_name = matched.name
-                self._recognition_confidence = conf
-                self._profile_manager.set_active_profile(matched.driver_id)
-                if hasattr(self._detector, "config"):
-                    curr_cfg = self._detector.config  # type: ignore[attr-defined]
-                    self._detector.config = replace(  # type: ignore[assignment,attr-defined]
-                        curr_cfg,
-                        eye_aspect_ratio_threshold=matched.ear_threshold,
-                        mouth_aspect_ratio_threshold=matched.mar_threshold,
+            profiles = [p for p in self._profile_manager.get_all() if p.biometric_signature]
+            if profiles:
+                matched, conf = self._recognizer.match(analysis.landmarks, w, h, profiles)
+                if matched is not None:
+                    self._match_votes[matched.driver_id] = (
+                        self._match_votes.get(matched.driver_id, 0) + 1
                     )
+                    if self._match_votes[matched.driver_id] >= 2:
+                        self._recognized_driver_name = matched.name
+                        self._recognition_confidence = conf
+                        self._recognition_locked = True
+                        self._profile_manager.set_active_profile(matched.driver_id)
+                        self.apply_profile(matched)
 
         distraction = None
         if self._distraction_detector is not None:
@@ -144,6 +155,7 @@ class LiveMonitor:
             assessment,
             driver_name=self._recognized_driver_name,
             confidence=self._recognition_confidence,
+            distraction=distraction,
         )
         return MonitorFrame(
             analysis=analysis,
@@ -165,8 +177,6 @@ def merge_signals(drowsiness: DriverSignals, distraction: DriverSignals) -> Driv
         perclos_fatigue=drowsiness.perclos_fatigue,
         microsleep_detected=drowsiness.microsleep_detected,
         talking=drowsiness.talking,
-        head_nodding=drowsiness.head_nodding,
-        eye_occluded=drowsiness.eye_occluded,
     )
 
 
@@ -176,6 +186,7 @@ def draw_monitor_overlay(
     assessment: RiskAssessment,
     driver_name: str | None = None,
     confidence: float = 0.0,
+    distraction: DistractionAnalysis | None = None,
 ) -> np.ndarray:
     """Draw readable status, active reasons, and measurements onto a frame copy."""
 
@@ -192,19 +203,6 @@ def draw_monitor_overlay(
         2,
         cv2.LINE_AA,
     )
-
-    # Occlusion / Sunglasses mode badge
-    if analysis.eye_occluded:
-        cv2.putText(
-            image,
-            "[SUNGLASSES MODE]",
-            (image.shape[1] - 220, 32),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (0, 200, 255),
-            2,
-            cv2.LINE_AA,
-        )
 
     status = ", ".join(assessment.reasons) if assessment.reasons else "attentive"
     if analysis.talking and not assessment.reasons:
@@ -238,21 +236,16 @@ def draw_monitor_overlay(
     )
 
     if analysis.face_detected:
-        if analysis.eye_occluded:
-            ear_str = "EAR: occluded"
-            perclos_str = "PERCLOS: --"
-        else:
-            ear_str = (
-                f"EAR: {analysis.eye_aspect_ratio:.2f}"
-                if analysis.eye_aspect_ratio is not None
-                else "EAR: --"
-            )
-            perclos_str = (
-                f"PERCLOS: {analysis.perclos * 100:.1f}%"
-                if analysis.perclos is not None
-                else "PERCLOS: --"
-            )
-
+        ear_str = (
+            f"EAR: {analysis.eye_aspect_ratio:.2f}"
+            if analysis.eye_aspect_ratio is not None
+            else "EAR: --"
+        )
+        perclos_str = (
+            f"PERCLOS: {analysis.perclos * 100:.1f}%"
+            if analysis.perclos is not None
+            else "PERCLOS: --"
+        )
         mar_str = (
             f"MAR: {analysis.mouth_aspect_ratio:.2f}"
             if analysis.mouth_aspect_ratio is not None
@@ -306,17 +299,24 @@ def draw_monitor_overlay(
             2,
             cv2.LINE_AA,
         )
-    elif analysis.head_nodding:
-        banner_text = (
-            "!!! HEAD NODDING (SUNGLASSES FALLBACK) - WAKE UP !!!"
-            if analysis.eye_occluded
-            else "!!! HEAD DROOP / NODDING DETECTED - STAY ALERT !!!"
-        )
+    elif distraction and distraction.signals.phone_detected:
         cv2.rectangle(image, (0, h - 45), (w, h), (0, 69, 255), thickness=-1)
         cv2.putText(
             image,
-            banner_text,
-            (max(16, w // 2 - 280), h - 14),
+            "!!! CELL PHONE USE DETECTED - FOCUS ON ROAD !!!",
+            (max(16, w // 2 - 270), h - 14),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+    elif distraction and distraction.signals.smoking_detected:
+        cv2.rectangle(image, (0, h - 45), (w, h), (0, 100, 230), thickness=-1)
+        cv2.putText(
+            image,
+            "!!! SMOKING DETECTED - DISTRACTION WARNING !!!",
+            (max(16, w // 2 - 260), h - 14),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.65,
             (255, 255, 255),

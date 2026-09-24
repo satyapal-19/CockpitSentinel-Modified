@@ -28,8 +28,6 @@ class DriverSignals:
     perclos_fatigue: bool = False
     microsleep_detected: bool = False
     talking: bool = False
-    head_nodding: bool = False
-    eye_occluded: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,12 +44,10 @@ SIGNAL_WEIGHTS: dict[str, int] = {
     "yawning": 2,
     "looking_away": 2,
     "phone_detected": 4,
-    "smoking_detected": 3,
+    "smoking_detected": 4,
     "perclos_fatigue": 3,
     "microsleep_detected": 6,
     "talking": 0,
-    "head_nodding": 4,
-    "eye_occluded": 0,
 }
 
 
@@ -64,8 +60,6 @@ SIGNAL_LABELS: dict[str, str] = {
     "perclos_fatigue": "high PERCLOS fatigue",
     "microsleep_detected": "microsleep detected",
     "talking": "talking detected",
-    "head_nodding": "head nodding detected",
-    "eye_occluded": "eyes occluded (sunglasses)",
 }
 
 
@@ -79,14 +73,9 @@ def assess_risk(
 ) -> RiskAssessment:
     """Convert independent detector signals into one reproducible risk result."""
 
-    active_signals = [name for name in SIGNAL_LABELS if getattr(signals, name)]
+    active_signals = [name for name in SIGNAL_LABELS if getattr(signals, name, False)]
     risk_signals = [name for name in active_signals if weights.get(name, 0) > 0]
     score = sum(weights[name] for name in risk_signals)
-
-    # When eyes are occluded (e.g. sunglasses), secondary indicators like head nodding
-    # represent primary fatigue evidence and escalate to critical immediately.
-    if signals.eye_occluded and signals.head_nodding:
-        score = max(score, critical_score)
 
     if score >= critical_score:
         level = RiskLevel.CRITICAL

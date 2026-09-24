@@ -56,9 +56,3 @@ def test_invalid_perclos_config_is_rejected():
 
     with pytest.raises(ValueError, match="speech_oscillation_hz"):
         DrowsinessConfig(speech_oscillation_hz=0)
-
-    with pytest.raises(ValueError, match="head_pitch_threshold_degrees"):
-        DrowsinessConfig(head_pitch_threshold_degrees=100.0)
-
-    with pytest.raises(ValueError, match="eye_contrast_threshold"):
-        DrowsinessConfig(eye_contrast_threshold=0)

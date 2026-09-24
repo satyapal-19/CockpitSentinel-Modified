@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import contextlib
 import logging
+import math
 import threading
 import time
 from collections import deque
@@ -21,12 +22,19 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from cockpit_sentinel.dashboard.worker import MonitoringWorker
-from cockpit_sentinel.drowsiness import ProfileManager
+from cockpit_sentinel.drowsiness import ProfileManager, extract_biometric_signature
 
 if TYPE_CHECKING:
     from cockpit_sentinel.pipeline.live_monitor import LiveMonitor, MonitorFrame
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_float(v: float | None, default: float = 0.0) -> float:
+    """Ensure floating point values are valid numbers for JSON compliance."""
+    if v is None or math.isnan(v) or math.isinf(v):
+        return default
+    return float(v)
 
 
 class CreateProfileRequest(BaseModel):
@@ -59,6 +67,10 @@ class TelemetryState:
         self.talking: bool = False
         self.head_nodding: bool = False
         self.microsleep: bool = False
+        self.phone_detected: bool = False
+        self.smoking_detected: bool = False
+        self.phone_confidence: float | None = None
+        self.smoking_confidence: float | None = None
         self.recognized_driver: str = "Default Driver"
         self.recognition_confidence: float = 0.95
         self.fps: float = 0.0
@@ -66,6 +78,7 @@ class TelemetryState:
         self.latest_jpeg: bytes | None = None
         self.ear_samples: deque[float] = deque(maxlen=180)
         self.mar_samples: deque[float] = deque(maxlen=180)
+        self.signature_samples: deque[list[float]] = deque(maxlen=60)
 
     def update_from_monitor(
         self,
@@ -77,28 +90,53 @@ class TelemetryState:
             analysis = processed.analysis
             assessment = processed.assessment
             if analysis.eye_aspect_ratio is not None:
-                self.ear = round(float(analysis.eye_aspect_ratio), 3)
+                self.ear = round(_safe_float(analysis.eye_aspect_ratio, 0.31), 3)
                 self.ear_samples.append(self.ear)
             if analysis.mouth_aspect_ratio is not None:
-                self.mar = round(float(analysis.mouth_aspect_ratio), 3)
+                self.mar = round(_safe_float(analysis.mouth_aspect_ratio, 0.19), 3)
                 self.mar_samples.append(self.mar)
             if analysis.head_pitch_degrees is not None:
-                self.pitch = round(float(analysis.head_pitch_degrees), 1)
+                self.pitch = round(_safe_float(analysis.head_pitch_degrees), 1)
             if analysis.head_yaw_degrees is not None:
-                self.yaw = round(float(analysis.head_yaw_degrees), 1)
+                self.yaw = round(_safe_float(analysis.head_yaw_degrees), 1)
             if analysis.perclos is not None:
-                self.perclos = round(float(analysis.perclos), 4)
+                self.perclos = round(_safe_float(analysis.perclos), 4)
+
+            # Extract biometric signature for auto-driver enrollment
+            if analysis.landmarks is not None and len(analysis.landmarks) >= 468:
+                h, w = processed.image.shape[:2]
+                sig = extract_biometric_signature(analysis.landmarks, w, h)
+                if sig is not None:
+                    self.signature_samples.append(sig)
 
             self.level = str(assessment.level.value)
             self.score = int(assessment.score)
-            self.eye_occluded = bool(analysis.eye_occluded)
+            self.eye_occluded = False
             self.talking = bool(analysis.talking)
-            self.head_nodding = bool(analysis.head_nodding)
+            self.head_nodding = False
             self.microsleep = bool(analysis.microsleep_detected)
+
+            # Object-detection distraction signals
+            if processed.distraction is not None:
+                self.phone_detected = bool(processed.distraction.signals.phone_detected)
+                self.smoking_detected = bool(processed.distraction.signals.smoking_detected)
+                self.phone_confidence = (
+                    round(float(processed.distraction.phone_confidence), 2)
+                    if processed.distraction.phone_confidence is not None
+                    else None
+                )
+                self.smoking_confidence = (
+                    round(float(processed.distraction.smoking_confidence), 2)
+                    if processed.distraction.smoking_confidence is not None
+                    else None
+                )
+
             if monitor._recognized_driver_name:
                 self.recognized_driver = monitor._recognized_driver_name
-                self.recognition_confidence = round(float(monitor._recognition_confidence), 2)
-            self.fps = round(float(fps), 1)
+                self.recognition_confidence = round(
+                    _safe_float(monitor._recognition_confidence, 0.95), 2
+                )
+            self.fps = round(_safe_float(fps), 1)
             self.camera_active = True
 
     def get_recent_samples(self, count: int = 90) -> tuple[list[float], list[float]]:
@@ -116,23 +154,31 @@ class TelemetryState:
             mars = mars[-count:]
         return ears, mars
 
+    def get_recent_signatures(self, count: int = 30) -> list[list[float]]:
+        with self._lock:
+            return list(self.signature_samples)[-count:]
+
     def to_dict(self) -> dict[str, Any]:
         with self._lock:
             return {
-                "ear": self.ear,
-                "mar": self.mar,
-                "pitch": self.pitch,
-                "yaw": self.yaw,
-                "perclos": self.perclos,
+                "ear": _safe_float(self.ear, 0.31),
+                "mar": _safe_float(self.mar, 0.19),
+                "pitch": _safe_float(self.pitch, 0.0),
+                "yaw": _safe_float(self.yaw, 0.0),
+                "perclos": _safe_float(self.perclos, 0.0),
                 "level": self.level,
                 "score": self.score,
-                "eye_occluded": self.eye_occluded,
+                "eye_occluded": False,
                 "talking": self.talking,
-                "head_nodding": self.head_nodding,
+                "head_nodding": False,
                 "microsleep": self.microsleep,
+                "phone_detected": self.phone_detected,
+                "smoking_detected": self.smoking_detected,
+                "phone_confidence": self.phone_confidence,
+                "smoking_confidence": self.smoking_confidence,
                 "recognized_driver": self.recognized_driver,
-                "recognition_confidence": self.recognition_confidence,
-                "fps": self.fps,
+                "recognition_confidence": _safe_float(self.recognition_confidence, 0.95),
+                "fps": _safe_float(self.fps, 0.0),
                 "camera_active": self.camera_active,
             }
 
@@ -229,6 +275,7 @@ def create_app(
         tel.recognized_driver = p.name
         if active_worker is not None:
             active_worker.sync_active_profile(p)
+            active_worker.reset_recognition()
         return p.to_dict()
 
     @app.post("/api/profiles/{driver_id}/calibrate", response_model=dict[str, Any])
@@ -238,11 +285,18 @@ def create_app(
             raise HTTPException(status_code=404, detail="Profile not found")
 
         sample_ear, sample_mar = tel.get_recent_samples(count=90)
-        calibrated = pm.auto_calibrate(driver_id, sample_ear, sample_mar)
+        sample_sigs = tel.get_recent_signatures(count=30)
+        calibrated = pm.auto_calibrate(
+            driver_id,
+            sample_ear,
+            sample_mar,
+            signature_samples=sample_sigs or None,
+        )
         if not calibrated:
             raise HTTPException(status_code=400, detail="Calibration failed")
         if active_worker is not None:
             active_worker.sync_active_profile(calibrated)
+            active_worker.reset_recognition()
         return calibrated.to_dict()
 
     @app.get("/api/telemetry")
@@ -252,36 +306,39 @@ def create_app(
     @app.get("/api/video_feed")
     def video_feed() -> StreamingResponse:
         def frame_generator():
-            while True:
-                if tel.latest_jpeg is not None:
-                    frame_bytes = tel.latest_jpeg
-                else:
-                    img = np.zeros((360, 640, 3), dtype=np.uint8)
-                    cv2.putText(
-                        img,
-                        "Connecting to CockpitSentinel Camera...",
-                        (100, 160),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.65,
-                        (200, 200, 200),
-                        2,
-                        cv2.LINE_AA,
-                    )
-                    cv2.putText(
-                        img,
-                        f"Active Profile: {tel.recognized_driver}",
-                        (140, 200),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.55,
-                        (100, 200, 255),
-                        1,
-                        cv2.LINE_AA,
-                    )
-                    _, encoded = cv2.imencode(".jpg", img)
-                    frame_bytes = encoded.tobytes()
+            try:
+                while True:
+                    if tel.latest_jpeg is not None:
+                        frame_bytes = tel.latest_jpeg
+                    else:
+                        img = np.zeros((360, 640, 3), dtype=np.uint8)
+                        cv2.putText(
+                            img,
+                            "Connecting to CockpitSentinel Camera...",
+                            (100, 160),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.65,
+                            (200, 200, 200),
+                            2,
+                            cv2.LINE_AA,
+                        )
+                        cv2.putText(
+                            img,
+                            f"Active Profile: {tel.recognized_driver}",
+                            (140, 200),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.55,
+                            (100, 200, 255),
+                            1,
+                            cv2.LINE_AA,
+                        )
+                        _, encoded = cv2.imencode(".jpg", img)
+                        frame_bytes = encoded.tobytes()
 
-                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n")
-                time.sleep(0.033)
+                    yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n")
+                    time.sleep(0.033)
+            except (GeneratorExit, asyncio.CancelledError, ConnectionResetError):
+                pass
 
         return StreamingResponse(
             frame_generator(),
@@ -329,9 +386,9 @@ def main() -> None:
         no_audio=args.no_audio,
     )
     print("\n=======================================================")
-    print("🚀 CockpitSentinel Telematics Dashboard Running at:")
-    print(f"   http://{args.host}:{args.port}")
-    print(f"   Camera Source: {args.source} | Device: {args.device}")
+    print("[*] CockpitSentinel Telematics Dashboard Running at:")
+    print(f"    http://{args.host}:{args.port}")
+    print(f"    Camera Source: {args.source} | Device: {args.device}")
     print("=======================================================\n")
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 

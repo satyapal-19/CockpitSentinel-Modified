@@ -95,7 +95,26 @@ def resolve_model_path(
         env_models = env_values.get("COCKPIT_MODELS_ROOT")
         root_path = Path(env_models) if env_models else project_root / "models"
 
-    # If the root already ends with 'pretrained', avoid duplicating the subfolder
     if root_path.name == "pretrained":
-        return root_path / filename
-    return root_path / "pretrained" / filename
+        candidate = root_path / filename
+    else:
+        candidate = root_path / "pretrained" / filename
+    if candidate.exists():
+        return candidate
+
+    # Fallback paths on Windows / local setup
+    fallback_roots = [
+        Path(r"D:\CockpitSentinel\models"),
+        Path(r"C:\CockpitSentinel\models"),
+        Path(r"C:\Users\SATYAPAL\CockpitSentinel\models"),
+        project_root / "models",
+    ]
+    for fb in fallback_roots:
+        p1 = fb / "pretrained" / filename
+        if p1.exists():
+            return p1
+        p2 = fb / filename
+        if p2.exists():
+            return p2
+
+    return candidate
